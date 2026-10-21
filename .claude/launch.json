@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "steward-sandbox",
+      "runtimeExecutable": ".venv/Scripts/steward.exe",
+      "runtimeArgs": ["-c", "sandbox-demo/steward.yaml", "serve", "--port", "8766"],
+      "port": 8766
+    }
+  ]
+}

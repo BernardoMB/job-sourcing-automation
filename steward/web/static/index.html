@@ -1,0 +1,849 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Steward</title>
+<style>
+:root {
+  --bg: #f6f5f2; --panel: #ffffff; --ink: #1d1f23; --muted: #646a73; --line: #e3e1db;
+  --accent: #2f5d50; --accent-ink: #ffffff; --accent-soft: #e4efe9;
+  --high: #b3261e; --high-soft: #fbe9e7; --warn: #8a5a00; --warn-soft: #fdf3dc;
+  --ok: #1e6b3a; --ok-soft: #e3f3e8; --info: #2b4f8a; --info-soft: #e6edf8; --violet: #5b3d8f; --violet-soft: #efe8f8;
+  --shadow: 0 1px 2px rgba(20,20,20,.06), 0 2px 8px rgba(20,20,20,.04);
+  --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15171a; --panel: #1e2125; --ink: #e8e6e1; --muted: #a0a5ad; --line: #30343a;
+    --accent: #7fc1a9; --accent-ink: #0f1a16; --accent-soft: #1f3029;
+    --high: #ff8a80; --high-soft: #3a2220; --warn: #f0c060; --warn-soft: #3a3020; --ok: #7fd49a; --ok-soft: #1d3326;
+    --info: #9dbcf0; --info-soft: #1f2a3d; --violet: #c6a8f0; --violet-soft: #2c2440;
+    --shadow: none;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+button, input, textarea, select { font: inherit; color: inherit; }
+input, textarea, select { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; }
+a { color: var(--info); }
+header.top { position: sticky; top: 0; z-index: 5; background: var(--panel); border-bottom: 1px solid var(--line); }
+.top-inner { max-width: 1240px; margin: 0 auto; padding: 10px 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.brand { display: flex; flex-direction: column; margin-right: auto; min-width: 0; }
+.brand b { font-size: 18px; letter-spacing: .2px; }
+.brand span { color: var(--muted); font-size: 12.5px; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); margin-right: 6px; vertical-align: middle; }
+.dot.busy { background: var(--warn); animation: pulse 1s infinite alternate; }
+.dot.off { background: var(--muted); }
+@keyframes pulse { from { opacity: .35; } to { opacity: 1; } }
+.btn { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 7px 14px; cursor: pointer; }
+.btn:hover { border-color: var(--muted); }
+.btn:disabled { opacity: .5; cursor: default; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.btn.danger { color: var(--high); }
+.btn.small { padding: 4px 10px; font-size: 13px; }
+.switch { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); cursor: pointer; }
+nav.tabs { max-width: 1240px; margin: 0 auto; padding: 0 16px; display: flex; gap: 4px; overflow-x: auto; }
+nav.tabs button { border: 0; background: none; padding: 10px 12px; border-bottom: 2px solid transparent; cursor: pointer; color: var(--muted); white-space: nowrap; }
+nav.tabs button.on { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+nav.tabs .badge { background: var(--high); color: #fff; border-radius: 999px; font-size: 11px; padding: 0 6px; margin-left: 4px; }
+main { max-width: 1240px; margin: 0 auto; padding: 16px; }
+.banner { background: var(--info-soft); color: var(--info); border-radius: 10px; padding: 8px 12px; margin-bottom: 12px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); gap: 10px; margin-bottom: 14px; }
+.stat { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; box-shadow: var(--shadow); }
+.stat b { font-size: 22px; display: block; }
+.stat span { color: var(--muted); font-size: 13px; }
+.toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 4px 0 6px; }
+.toolbar input[type=search] { flex: 1 1 220px; }
+.layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 18px; align-items: start; }
+@media (max-width: 900px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+select, input, textarea { max-width: 100%; min-width: 0; }
+.toolbar select { flex: 1 1 130px; }
+.card-head h3 { min-width: 0; overflow-wrap: anywhere; }
+h2.sec { font-size: 14px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 20px 0 10px; display: flex; gap: 8px; align-items: center; }
+h2.sec .count { background: var(--line); color: var(--ink); border-radius: 999px; padding: 0 8px; font-size: 12px; }
+h2.sec.high { color: var(--high); }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin-bottom: 12px; box-shadow: var(--shadow); }
+.card.high { border-left: 4px solid var(--high); }
+.card.decided { opacity: .85; }
+.card.fresh { outline: 2px solid var(--accent); }
+.card-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.card-head h3 { margin: 0; font-size: 16px; flex: 1 1 260px; }
+.meta { color: var(--muted); font-size: 13px; margin-top: 2px; overflow-wrap: anywhere; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.chip { font-size: 12px; border-radius: 999px; padding: 2px 9px; background: var(--line); max-width: 100%; overflow-wrap: anywhere; }
+.chip.ok { background: var(--ok-soft); color: var(--ok); }
+.chip.bad { background: var(--high-soft); color: var(--high); }
+.chip.warn { background: var(--warn-soft); color: var(--warn); }
+.chip.info { background: var(--info-soft); color: var(--info); }
+.chip.violet { background: var(--violet-soft); color: var(--violet); }
+.state { font-size: 12px; font-weight: 700; padding: 2px 9px; border-radius: 6px; }
+.state.approved, .state.edited { background: var(--ok-soft); color: var(--ok); }
+.state.rejected { background: var(--high-soft); color: var(--high); }
+ul.reasons { margin: 6px 0 8px; padding-left: 18px; color: var(--muted); font-size: 13.5px; }
+details { margin: 6px 0; }
+details > summary { cursor: pointer; color: var(--muted); font-size: 13.5px; }
+pre.msg { white-space: pre-wrap; font: 13.5px/1.5 system-ui, sans-serif; background: var(--bg); border-radius: 8px; padding: 10px 12px; margin: 6px 0; overflow-wrap: anywhere; }
+.action { border: 1px dashed var(--line); border-radius: 10px; padding: 10px 12px; margin: 8px 0; }
+.action label.t { font-size: 12px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); display: block; margin-bottom: 4px; }
+.action input[type=text], .action textarea, .form input[type=text], .form input[type=password], .form textarea, .form select { width: 100%; }
+.action textarea { min-height: 170px; resize: vertical; line-height: 1.45; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.buttons { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; align-items: center; }
+.form { background: var(--bg); border-radius: 10px; padding: 12px; margin-top: 10px; }
+.form h4 { margin: 0 0 8px; font-size: 14px; }
+.form fieldset { border: 0; padding: 0; margin: 0 0 10px; }
+.form legend { font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+.form label.opt { display: inline-flex; gap: 6px; align-items: center; margin: 2px 12px 2px 0; font-size: 14px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 10px 14px; }
+.field label { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 3px; }
+.side .card h3 { margin: 0 0 6px; font-size: 15px; }
+.meeting { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.meeting:last-child { border-bottom: 0; }
+.meeting b { display: block; }
+.empty { color: var(--muted); font-size: 14px; padding: 4px 0 8px; }
+.dt-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.dt-bar input[type=search] { flex: 1 1 240px; }
+.dt-count { color: var(--muted); font-size: 13px; }
+.tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); font-size: 14px; vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 12.5px; text-transform: uppercase; letter-spacing: .4px; white-space: nowrap; }
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { color: var(--ink); }
+tr.filters th { padding: 4px 6px; text-transform: none; letter-spacing: 0; }
+tr.filters select, tr.filters input { width: 100%; min-width: 90px; font-size: 13px; padding: 3px 6px; }
+tbody tr.clickable { cursor: pointer; }
+tbody tr.clickable:hover td { background: var(--bg); }
+tr.detail td { background: var(--bg); }
+.mono { font-family: var(--mono); font-size: 12.5px; }
+.toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 10px; z-index: 20; max-width: calc(100vw - 32px); box-shadow: 0 4px 18px rgba(0,0,0,.2); }
+.hidden { display: none !important; }
+.lock { background: var(--high-soft); color: var(--high); border-radius: 8px; padding: 6px 10px; font-size: 13.5px; margin: 6px 0; }
+.pill-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.muted { color: var(--muted); }
+.step { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 10px; }
+.step .num { width: 26px; height: 26px; border-radius: 50%; background: var(--line); display: grid; place-items: center; font-weight: 700; font-size: 13px; }
+.step.ok .num { background: var(--ok-soft); color: var(--ok); }
+.step.todo .num { background: var(--warn-soft); color: var(--warn); }
+.result { font-size: 13px; margin-top: 6px; }
+.result.ok { color: var(--ok); } .result.bad { color: var(--high); }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="top-inner">
+    <div class="brand"><b>The Steward</b><span id="status"><span class="dot off"></span>Loading...</span></div>
+    <label class="switch" title="When on, each approval is sent/booked right away instead of waiting for Go"><input type="checkbox" id="instant"> Act on each approval immediately</label>
+    <button class="btn small" id="alertsBtn" title="Show a desktop notification when something needs you">🔔 Desktop alerts</button>
+    <button class="btn" id="pollBtn" title="Check email, LinkedIn and calendar now">Check now</button>
+    <button class="btn primary" id="goBtn" title="Commit your decisions and execute them in one batch">Go</button>
+  </div>
+  <nav class="tabs" id="tabs">
+    <button data-tab="brief" class="on">Briefing <span class="badge hidden" id="badge"></span></button>
+    <button data-tab="history">Decisions</button>
+    <button data-tab="pipeline">Pipeline</button>
+    <button data-tab="rules">Rules &amp; learning</button>
+    <button data-tab="ledger">Ledger</button>
+    <button data-tab="setup">Setup</button>
+  </nav>
+</header>
+<main>
+  <div id="pauseBanner" class="banner hidden" style="background:var(--warn-soft);color:var(--warn)"></div>
+  <div id="liveBanner" class="banner hidden"><span id="liveText"></span><button class="btn small" id="liveShow">Show</button></div>
+  <section id="tab-brief"></section>
+  <section id="tab-history" class="hidden"></section>
+  <section id="tab-pipeline" class="hidden"></section>
+  <section id="tab-rules" class="hidden"></section>
+  <section id="tab-ledger" class="hidden"></section>
+  <section id="tab-setup" class="hidden"></section>
+</main>
+<div id="toast" class="toast hidden"></div>
+<script>
+const TOKEN = "__STEWARD_TOKEN__";
+let B = null;
+let tab = "brief";
+let dirty = false;           // the user is editing a draft: don't re-render under them
+let freshIds = new Set();    // items that arrived since the page last rendered
+let knownIds = null;
+
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const pct = (x) => (x ?? 0).toFixed(2);
+const label = (s) => String(s || "").replace(/_/g, " ");
+const $ = (sel, root = document) => root.querySelector(sel);
+const store = {
+  get(k, d) { try { const v = localStorage.getItem("steward." + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem("steward." + k, JSON.stringify(v)); } catch (e) {} },
+};
+
+async function api(path, method = "GET", body) {
+  const opts = { method, headers: { "X-Steward-Token": TOKEN } };
+  if (body !== undefined) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
+  const r = await fetch(path, opts);
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.detail || data.error || r.statusText);
+  return data;
+}
+function toast(msg, ms = 4000) {
+  if (!msg) return;
+  const t = $("#toast"); t.textContent = msg; t.classList.remove("hidden");
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.add("hidden"), ms);
+}
+async function act(fn, okMsg) {
+  try { const r = await fn(); dirty = false; if (okMsg) toast(typeof okMsg === "function" ? okMsg(r) : okMsg); await refresh(); return r; }
+  catch (e) { toast("Error: " + e.message, 7000); }
+}
+
+// ---------- reusable table: search, per-column filters, sortable headers ----------
+const TABLES = {};
+function dataTable(host, cfg) {
+  const st = TABLES[cfg.id] || (TABLES[cfg.id] = store.get("table." + cfg.id, { q: "", filters: {}, sort: cfg.defaultSort || null }));
+  const val = (c, r) => c.value ? c.value(r) : r[c.key];
+  const text = (c, r) => String(val(c, r) ?? "");
+  const save = () => store.set("table." + cfg.id, st);
+  const options = (c) => [...new Set(cfg.rows.map(r => text(c, r)).filter(Boolean))].sort();
+  host.innerHTML = `<div class="dt">
+    <div class="dt-bar"><input type="search" class="dt-q" placeholder="Search ${esc(cfg.noun || "rows")}…" value="${esc(st.q)}">
+      <span class="dt-count"></span><button class="btn small dt-clear">Clear filters</button>${cfg.extra || ""}</div>
+    <div class="tablewrap"><table><thead>
+      <tr>${cfg.columns.map(c => `<th class="${c.sort === false ? "" : "sortable"}" data-k="${c.key}">${esc(c.label)}<span class="arrow"></span></th>`).join("")}</tr>
+      <tr class="filters">${cfg.columns.map(c => c.filter === "select"
+        ? `<th><select data-f="${c.key}"><option value="">All</option>${options(c).map(o => `<option ${st.filters[c.key] === o ? "selected" : ""}>${esc(o)}</option>`).join("")}</select></th>`
+        : c.filter === "text" ? `<th><input data-f="${c.key}" placeholder="Filter" value="${esc(st.filters[c.key] || "")}"></th>` : "<th></th>").join("")}</tr>
+    </thead><tbody></tbody></table></div></div>`;
+  const body = host.querySelector("tbody");
+  function draw() {
+    const q = st.q.trim().toLowerCase();
+    let rows = cfg.rows.filter(r => {
+      if (q && !q.split(/\s+/).every(t => cfg.columns.some(c => text(c, r).toLowerCase().includes(t)) || (cfg.searchExtra && cfg.searchExtra(r).toLowerCase().includes(t)))) return false;
+      return cfg.columns.every(c => {
+        const f = st.filters[c.key];
+        if (!f) return true;
+        return c.filter === "select" ? text(c, r) === f : text(c, r).toLowerCase().includes(f.toLowerCase());
+      });
+    });
+    if (st.sort) {
+      const c = cfg.columns.find(x => x.key === st.sort.key);
+      if (c) {
+        const sv = c.sortValue || ((r) => val(c, r));
+        rows = rows.slice().sort((a, b) => {
+          const x = sv(a), y = sv(b);
+          const cmp = (typeof x === "number" && typeof y === "number") ? x - y : String(x ?? "").localeCompare(String(y ?? ""), undefined, { numeric: true });
+          return st.sort.dir === "asc" ? cmp : -cmp;
+        });
+      }
+    }
+    host.querySelectorAll("th.sortable").forEach(th => {
+      th.querySelector(".arrow").textContent = st.sort && st.sort.key === th.dataset.k ? (st.sort.dir === "asc" ? " ▲" : " ▼") : "";
+    });
+    host.querySelector(".dt-count").textContent = `${rows.length} of ${cfg.rows.length}`;
+    body.innerHTML = rows.length ? rows.map(r => `<tr class="${cfg.onRow ? "clickable" : ""}" data-key="${esc(r[cfg.rowKey || "id"])}">${cfg.columns.map(c => `<td>${c.render ? c.render(r) : esc(text(c, r))}</td>`).join("")}</tr>`).join("")
+      : `<tr><td colspan="${cfg.columns.length}" class="muted">${esc(cfg.empty || "Nothing here yet.")}</td></tr>`;
+    if (cfg.afterDraw) cfg.afterDraw(host);
+  }
+  host.querySelector(".dt-q").addEventListener("input", (e) => { st.q = e.target.value; save(); draw(); });
+  host.querySelectorAll("[data-f]").forEach(el => el.addEventListener(el.tagName === "SELECT" ? "change" : "input", () => { st.filters[el.dataset.f] = el.value; save(); draw(); }));
+  host.querySelector(".dt-clear").addEventListener("click", () => { st.q = ""; st.filters = {}; save(); dataTable(host, cfg); });
+  host.querySelectorAll("th.sortable").forEach(th => th.addEventListener("click", () => {
+    st.sort = st.sort && st.sort.key === th.dataset.k ? { key: th.dataset.k, dir: st.sort.dir === "asc" ? "desc" : "asc" } : { key: th.dataset.k, dir: "asc" };
+    save(); draw();
+  }));
+  if (cfg.onRow) body.addEventListener("click", (e) => {
+    if (e.target.closest("select, input, button, a")) return;
+    const tr = e.target.closest("tr[data-key]");
+    if (!tr) return;
+    const next = tr.nextElementSibling;
+    if (next && next.classList.contains("detail")) { next.remove(); return; }
+    const row = cfg.rows.find(r => String(r[cfg.rowKey || "id"]) === tr.dataset.key);
+    tr.insertAdjacentHTML("afterend", `<tr class="detail"><td colspan="${cfg.columns.length}">${cfg.onRow(row)}</td></tr>`);
+  });
+  draw();
+}
+
+// ---------- data + live updates ----------
+async function refresh(force) {
+  if (!force && isEditing()) return;
+  B = await api("/api/briefing");
+  const ids = new Set([...B.high_priority, ...B.needs_decision].map(v => v.id));
+  if (knownIds) ids.forEach(id => { if (!knownIds.has(id)) freshIds.add(id); });
+  knownIds = ids;
+  renderHeader();
+  $("#liveBanner").classList.add("hidden");
+  if (tab === "brief") renderBrief();
+  if (tab === "pipeline") renderPipeline();
+  if (tab === "rules") renderRules();
+  if (tab === "history") renderHistory();
+}
+function isEditing() {
+  return dirty || !!document.querySelector(".dontask, .override:not(.hidden)") ||
+    (document.activeElement && ["TEXTAREA", "INPUT", "SELECT"].includes(document.activeElement.tagName) && document.activeElement.closest("main"));
+}
+function renderHeader() {
+  const c = B.counts, loop = B.loop;
+  const last = B.last_cycle && B.last_cycle.at ? new Date(B.last_cycle.at).toLocaleTimeString() : "not yet";
+  const dot = !loop.watching ? "off" : loop.running ? "busy" : "";
+  const watching = loop.watching ? `Watching: email every ${loop.polls.email} min, calendar ${loop.polls.calendar} min, LinkedIn ${loop.polls.linkedin} min` : "Not watching (started with --no-watch)";
+  $("#status").innerHTML = `<span class="dot ${dot}"></span>${esc(watching)} · last check ${esc(last)} · ${esc(B.llm.provider)} (${esc(B.llm.model)})${loop.last_error ? " · ⚠ " + esc(loop.last_error) : ""}`;
+  const paused = B.llm.paused;
+  const pb = $("#pauseBanner");
+  pb.classList.toggle("hidden", !paused);
+  if (paused) pb.textContent = `⏸ Claude is paused until ${new Date(paused.until).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}: ${paused.reason} New messages are still collected and will be drafted automatically after that.`;
+  const go = $("#goBtn");
+  go.textContent = c.staged ? `Go: execute ${c.staged} decision${c.staged === 1 ? "" : "s"}` : (c.in_flight ? `Go (${c.in_flight} queued)` : "Go");
+  go.disabled = c.staged + c.in_flight === 0;
+  $("#instant").checked = !!B.settings.execute_on_approve;
+  const badge = $("#badge");
+  badge.textContent = c.undecided; badge.classList.toggle("hidden", !c.undecided);
+  document.title = c.undecided ? `(${c.undecided}) The Steward` : "The Steward";
+}
+function notifyDesktop(title, body) {
+  try { if ("Notification" in window && Notification.permission === "granted") new Notification(title, { body }); } catch (e) {}
+}
+function startStream() {
+  let lastVersion = null;
+  const es = new EventSource(`/api/stream?token=${encodeURIComponent(TOKEN)}`);
+  es.onmessage = (m) => {
+    const ev = JSON.parse(m.data);
+    if (lastVersion === null) { lastVersion = ev.version; return; }
+    lastVersion = ev.version;
+    if (ev.kind === "checking") { const d = $("#status .dot"); if (d) d.className = "dot busy"; return; }
+    if (ev.kind === "cycle") {
+      const parts = [];
+      if (ev.processed) parts.push(`${ev.processed} new item${ev.processed === 1 ? "" : "s"}`);
+      if (ev.auto) parts.push(`${ev.auto} handled automatically`);
+      if (ev.redrafted) parts.push(`${ev.redrafted} re-drafted (times changed)`);
+      if (ev.escalated) parts.push(`${ev.escalated} escalated`);
+      if (parts.length) {
+        const msg = parts.join(" · ") + (ev.waiting ? ` · ${ev.waiting} waiting for you${ev.high ? ` (${ev.high} high priority)` : ""}` : "");
+        toast(msg, 6000);
+        if (ev.processed || ev.escalated) notifyDesktop("The Steward", msg);
+      }
+    }
+    if (isEditing()) {
+      $("#liveText").textContent = "New updates arrived while you were editing.";
+      $("#liveBanner").classList.remove("hidden");
+    } else if (tab !== "ledger" && tab !== "setup") refresh();
+    else api("/api/briefing").then(b => { B = b; renderHeader(); });
+  };
+  es.onerror = () => { const d = $("#status .dot"); if (d) d.className = "dot off"; };
+}
+
+// ---------- briefing ----------
+function evidenceChips(v) {
+  const out = [];
+  for (const e of v.evidence || []) {
+    if (e.source === "cv") {
+      const yrs = e.years ? ` · ${e.years}y` : "";
+      out.push(`<span class="chip ${e.answer_found ? "ok" : "bad"}" title="${esc(e.question)}">${e.answer_found ? "CV ✓" : "Not in CV ✗"} ${esc(e.skill || "")}${yrs}</span>`);
+    } else {
+      out.push(`<span class="chip info" title="${esc(e.answer || e.question)}">${esc(label(e.type))} · from ${esc(e.source)}</span>`);
+    }
+  }
+  for (const f of v.fit || []) out.push(`<span class="chip ${f.found ? "" : "warn"}">fit: ${esc(f.skill)}${f.years ? " · " + f.years + "y" : ""}</span>`);
+  return out.join("");
+}
+function scheduleBlock(v) {
+  const s = v.schedule || {};
+  if (!s.kind || s.kind === "none") return "";
+  const kinds = { accept_proposed: "Proposed time is free", conflict_counter: "Proposed time conflicts — offering alternatives",
+    propose_slots: "Offering your available times", invite_accept: "Invitation fits your calendar", invite_conflict: "Conflicts with your calendar", unknown: "Calendar unavailable" };
+  const checks = (s.checks || []).map(c => `<div>${esc(c.label)}: ${(c.ok ?? c.free) ? "<b>free</b>" : esc((c.problems || []).join(", ") || "conflict") + (c.conflicts && c.conflicts.length ? " (" + esc(c.conflicts.map(x => x.title).join(", ")) + ")" : "")}</div>`).join("");
+  const slots = (s.slots || []).length ? `<div class="muted">Offering: ${s.slots.map(esc).join(" · ")}</div>` : "";
+  return `<div class="chips"><span class="chip violet">📅 ${esc(kinds[s.kind] || s.kind)}</span></div><div class="meta">${checks}${slots}</div>`;
+}
+function actionEditor(v, a, i) {
+  const p = a.payload, dis = v.status !== "pending" ? "disabled" : "";
+  const skip = `<label class="row" style="font-size:13px;margin-top:6px"><input type="checkbox" data-skip="${i}" ${a.skip ? "checked" : ""} ${dis}> Don't do this part</label>`;
+  if (a.type === "send_email") return `<div class="action" data-i="${i}" data-type="send_email">
+      <label class="t">Reply by email to ${esc((p.to || []).join(", "))}</label>
+      <input type="text" data-f="subject" value="${esc(p.subject)}" ${dis}>
+      <textarea data-f="body" style="margin-top:6px" ${dis}>${esc(p.body)}</textarea>${skip}</div>`;
+  if (a.type === "send_linkedin") return `<div class="action" data-i="${i}" data-type="send_linkedin">
+      <label class="t">Reply on LinkedIn to ${esc(p.recipient || "")}</label>
+      <textarea data-f="text" ${dis}>${esc(p.text)}</textarea>${skip}</div>`;
+  if (a.type === "create_event") return `<div class="action" data-i="${i}" data-type="create_event">
+      <label class="t">Book meeting (invite ${esc((p.attendees || []).join(", "))})</label>
+      <input type="text" data-f="title" value="${esc(p.title)}" ${dis}>
+      <div class="row" style="margin-top:6px"><input type="text" data-f="start" value="${esc(p.start)}" ${dis} style="flex:1"><input type="text" data-f="end" value="${esc(p.end)}" ${dis} style="flex:1"></div>
+      <div class="meta">Re-checked against your calendar right before booking.</div>${skip}</div>`;
+  if (a.type === "rsvp_event") return `<div class="action" data-i="${i}" data-type="rsvp_event">
+      <label class="t">Answer the invitation</label>
+      <select data-f="response" ${dis}>${["accepted", "tentative", "declined"].map(r => `<option ${r === p.response ? "selected" : ""}>${r}</option>`).join("")}</select>${skip}</div>`;
+  return "";
+}
+function collectActions(card, v) {
+  return v.actions.map((a, i) => {
+    const box = card.querySelector(`.action[data-i="${i}"]`);
+    const payload = {};
+    if (box) box.querySelectorAll("[data-f]").forEach(el => { payload[el.dataset.f] = el.value; });
+    const skip = box ? !!box.querySelector(`[data-skip="${i}"]`)?.checked : false;
+    return { type: a.type, payload, skip };
+  });
+}
+function dontAskForm(v) {
+  const d = v.dont_ask;
+  if (!d.allowed) return `<div class="form"><b>Can't delegate this.</b> ${esc(d.blocked_reason)}.</div>`;
+  const techs = (d.technologies || []).map(t => `<label class="opt"><input type="checkbox" name="tech" value="${esc(t)}"> ${esc(t)}</label>`).join("") || `<span class="muted">No technologies mentioned.</span>`;
+  return `<div class="form dontask">
+    <h4>Don't ask me again for messages like this</h4>
+    <fieldset><legend>Kind of message</legend>${d.categories.map(c => `<span class="chip">${esc(label(c))}</span>`).join(" ")}</fieldset>
+    <fieldset><legend>Only when they ask about (leave empty for any technology in your CV)</legend>${techs}</fieldset>
+    <fieldset><legend>Narrow it further (optional)</legend>
+      ${d.sender ? `<label class="opt"><input type="checkbox" name="sender" value="${esc(d.sender)}"> only from ${esc(d.sender)}</label>` : ""}
+      ${d.company ? `<label class="opt"><input type="checkbox" name="company" value="${esc(d.company)}"> only for ${esc(d.company)}</label>` : ""}
+      <label class="opt"><input type="checkbox" name="channel" value="${esc(v.channel)}"> only on ${esc(v.channel)}</label>
+    </fieldset>
+    <fieldset><legend>Next time, Steward should</legend>
+      <label class="opt"><input type="radio" name="tier" value="auto_approve" checked> Act and tell me (shows under "Handled automatically")</label>
+      <label class="opt"><input type="radio" name="tier" value="auto_send"> Act silently (ledger only)</label>
+    </fieldset>
+    <fieldset><legend>Still ask me when confidence is below <b class="cval">0.85</b></legend>
+      <input type="range" name="minc" min="0.5" max="0.99" step="0.01" value="0.85" style="width:220px">
+    </fieldset>
+    <div class="buttons"><button class="btn primary small" data-do="create-rule">Create rule and approve this draft</button>
+    <button class="btn small" data-do="cancel-rule">Cancel</button></div>
+    <div class="meta">Facts still come only from your CV and calendar; salary, offers and other sensitive topics always come back to you.</div>
+  </div>`;
+}
+function draftCard(v) {
+  const decided = v.status !== "pending";
+  const opp = v.opportunity ? `${esc(v.opportunity.company || "")}${v.opportunity.role ? " — " + esc(v.opportunity.role) : ""} · ${esc(v.opportunity.stage)}` : "";
+  const lock = (v.reasons || []).some(r => r.startsWith("Offer room")) ? `<div class="lock">🔒 Offer stage: autonomy is revoked for this thread. You handle it personally.</div>` : "";
+  const ja = v.job_advancement ?? 0;
+  const actions = v.actions.length ? v.actions.map((a, i) => actionEditor(v, a, i)).join("") : `<div class="empty">No written reply possible here: handle it yourself (for example, call them back), then reject to clear it.</div>`;
+  const buttons = decided
+    ? `<span class="state ${v.status}">${v.status === "rejected" ? "Rejected" : v.status === "edited" ? "Edited & approved" : "Approved"}</span><span class="meta">${B.settings.execute_on_approve ? "" : "runs when you press Go"}</span><button class="btn small" data-do="reset">Undo</button>`
+    : `<button class="btn primary small" data-do="approve">${v.actions.length ? "Approve" : "Done"}</button>
+       <button class="btn small danger" data-do="reject">Reject</button>
+       ${v.actions.length ? `<button class="btn small" data-do="dontask">Don't ask again…</button>` : ""}`;
+  return `<article class="card ${v.priority === "high" ? "high" : ""} ${decided ? "decided" : ""} ${freshIds.has(v.id) ? "fresh" : ""}" data-id="${v.id}">
+    <div class="card-head"><span class="chip info">${esc(v.channel)}</span><h3>${esc(v.summary)}</h3><span class="meta">${freshIds.has(v.id) ? "<b>new</b> · " : ""}${esc(v.created_ago)}</span></div>
+    <div class="meta">From ${esc(v.event.sender_name || "")} &lt;${esc(v.event.sender_address || "")}&gt; · ${esc(v.event.received || "")}${opp ? " · " + opp : ""}</div>
+    ${lock}
+    <div class="chips">
+      <span class="chip" title="Priority score: ${esc((v.priority_why || []).join(", ") || "base")}">priority ${Math.round(v.priority_score || 0)}${(v.priority_why || []).length ? " · " + esc(v.priority_why.join(", ")) : ""}</span>
+      <span class="chip ${v.band === "HIGH" ? "ok" : v.band === "LOW" ? "bad" : "warn"}" title="Confidence band">${esc(v.band)} · ${pct(v.confidence)}</span>
+      <span class="chip ${ja < 0.5 ? "bad" : "ok"}" title="Does this reply move you toward an offer?">job advancement ${pct(ja)}</span>
+      <span class="chip ${v.risk === "high" ? "bad" : v.risk === "medium" ? "warn" : ""}">risk ${esc(v.risk)}</span>
+      ${(v.categories || []).map(c => `<span class="chip">${esc(label(c))}</span>`).join("")}
+      ${v.shadow_rules.length ? `<span class="chip violet">shadow rule watching</span>` : ""}
+    </div>
+    <ul class="reasons">${(v.reasons || []).map(r => `<li>${esc(r)}</li>`).join("")}</ul>
+    <details ${v.priority === "high" ? "open" : ""}><summary>Their message</summary><pre class="msg">${esc(v.event.body)}</pre></details>
+    <div class="chips">${evidenceChips(v)}</div>
+    ${scheduleBlock(v)}
+    ${(v.review.issues || []).length || (v.review.risks || []).length ? `<div class="meta">Reviewer: ${esc([...v.review.issues, ...v.review.risks].join(" · "))}</div>` : ""}
+    ${actions}
+    <div class="buttons">${buttons}</div>
+    <div class="dontask-slot"></div>
+  </article>`;
+}
+function handledCard(v) {
+  const sent = v.actions.map(a => a.type === "send_email" ? `Email to ${esc((a.payload.to || []).join(", "))}:\n${esc(a.payload.body)}`
+    : a.type === "send_linkedin" ? `LinkedIn:\n${esc(a.payload.text)}` : a.type === "create_event" ? `Booked: ${esc(a.payload.title)} ${esc(a.payload.start)}`
+    : `RSVP ${esc(a.payload.response)}`).join("\n\n");
+  const body = v.actions.find(a => a.type === "send_email" || a.type === "send_linkedin");
+  const text = body ? (body.payload.body || body.payload.text || "") : "";
+  return `<article class="card" data-id="${v.id}">
+    <div class="card-head"><span class="chip ok">done</span><h3>${esc(v.summary)}</h3></div>
+    <div class="meta">Under rule “${esc(v.rule ? v.rule.name : "")}” · confidence ${pct(v.confidence)} · job advancement ${pct(v.job_advancement)}</div>
+    <details><summary>What Steward did</summary><pre class="msg">${sent}</pre></details>
+    <div class="buttons"><button class="btn small danger" data-do="wrong">This was wrong…</button></div>
+    <div class="form hidden override">
+      <h4>Teach Steward</h4>
+      <input type="text" name="note" placeholder="What was wrong? (required)">
+      <textarea name="corrected" style="margin-top:6px;min-height:120px" placeholder="What you would have sent instead (optional)">${esc(text)}</textarea>
+      <div class="buttons"><button class="btn small primary" data-do="override">Record and demote the rule</button></div>
+    </div>
+  </article>`;
+}
+function proposalCard(p) {
+  const info = p.status === "info";
+  return `<article class="card" data-pid="${p.id}">
+    <div class="card-head"><span class="chip violet">${info ? "update" : "suggestion"}</span><h3>${esc(p.title)}</h3></div>
+    <div class="meta">${esc(p.rationale)}</div>
+    <div class="buttons">${info ? `<button class="btn small" data-do="ack">OK</button>` :
+      `<button class="btn small primary" data-do="accept">Accept</button><button class="btn small" data-do="dismiss">Dismiss</button>`}</div>
+  </article>`;
+}
+const BF = store.get("briefFilters", { q: "", channel: "", category: "", sort: "priority" });
+function briefFilter(items) {
+  const q = BF.q.trim().toLowerCase();
+  let out = items.filter(v => {
+    if (BF.channel && v.channel !== BF.channel) return false;
+    if (BF.category && !(v.categories || []).includes(BF.category)) return false;
+    if (!q) return true;
+    const hay = [v.summary, v.event.sender_name, v.event.sender_address, v.event.subject, v.event.body,
+      v.opportunity && v.opportunity.company, ...(v.categories || []), ...v.actions.map(a => a.payload.body || a.payload.text || "")].join(" ").toLowerCase();
+    return q.split(/\s+/).every(t => hay.includes(t));
+  });
+  const key = { priority: v => -(v.priority_score || 0), newest: v => -(Date.parse(v.created_at) || v.id), oldest: v => (Date.parse(v.created_at) || v.id),
+    confidence: v => -(v.confidence || 0), job: v => -(v.job_advancement || 0) }[BF.sort] || (v => -(v.priority_score || 0));
+  return out.sort((a, b) => key(a) - key(b));
+}
+function section(title, items, render, cls = "") {
+  if (!items.length) return "";
+  return `<h2 class="sec ${cls}">${title} <span class="count">${items.length}</span></h2>${items.map(render).join("")}`;
+}
+function renderBrief() {
+  const c = B.counts;
+  const all = [...B.high_priority, ...B.needs_decision, ...B.handled_automatically];
+  const channels = [...new Set(all.map(v => v.channel))].sort();
+  const cats = [...new Set(all.flatMap(v => v.categories || []))].sort();
+  const high = briefFilter(B.high_priority), normal = briefFilter(B.needs_decision), handled = briefFilter(B.handled_automatically);
+  const filtered = BF.q || BF.channel || BF.category;
+  const meetings = (B.upcoming || []).map(m => `<div class="meeting"><b>${esc(m.title)}</b>
+      <span class="meta">${esc(m.when)}${m.my_response === "needsAction" ? " · not answered yet" : ""}</span>
+      ${m.meeting_link ? `<div><a href="${esc(m.meeting_link)}" target="_blank" rel="noopener">Join</a></div>` : ""}</div>`).join("") || `<div class="empty">No job-search meetings in the next 7 days.</div>`;
+  const stages = Object.entries(B.pipeline.by_stage).filter(([, n]) => n).map(([s, n]) => `<span class="chip">${esc(B.stages[s])}: ${n}</span>`).join(" ") || `<span class="muted">Empty</span>`;
+  const fyi = (B.fyi || []).map(f => `<div class="meeting"><b>${esc(f.summary)}</b><span class="meta">${esc(f.source)} · ${esc(f.received)}</span></div>`).join("");
+  const flight = (B.in_flight || []).map(v => `<div class="meeting"><b>${esc(v.summary)}</b><span class="meta">${esc(v.status)}${v.status_reason ? " · " + esc(v.status_reason) : ""}</span></div>`).join("");
+  $("#tab-brief").innerHTML = `
+    <div class="strip">
+      <div class="stat"><b>${c.undecided}</b><span>need your decision</span></div>
+      <div class="stat"><b style="color:var(--high)">${c.high_priority}</b><span>high priority</span></div>
+      <div class="stat"><b>${c.staged}</b><span>decided, ${B.settings.execute_on_approve ? "running" : "waiting for Go"}</span></div>
+      <div class="stat"><b style="color:var(--ok)">${c.handled_automatically + c.handled_silently}</b><span>handled automatically</span></div>
+      <div class="stat"><b style="color:var(--violet)">${c.suggestions}</b><span>suggested automations</span></div>
+    </div>
+    <div class="layout">
+      <div>
+        <div class="toolbar">
+          <input type="search" id="bq" placeholder="Search messages, companies, drafts…" value="${esc(BF.q)}">
+          <select id="bch"><option value="">All channels</option>${channels.map(x => `<option ${BF.channel === x ? "selected" : ""}>${esc(x)}</option>`).join("")}</select>
+          <select id="bcat"><option value="">All kinds</option>${cats.map(x => `<option value="${esc(x)}" ${BF.category === x ? "selected" : ""}>${esc(label(x))}</option>`).join("")}</select>
+          <select id="bsort">${[["priority", "Sort: priority"], ["newest", "Newest first"], ["oldest", "Oldest first"], ["confidence", "Most confident"], ["job", "Best for landing the job"]].map(([k, l]) => `<option value="${k}" ${BF.sort === k ? "selected" : ""}>${l}</option>`).join("")}</select>
+          ${filtered ? `<span class="meta">${high.length + normal.length + handled.length} of ${all.length} shown</span><button class="btn small" id="bclear">Clear</button>` : ""}
+        </div>
+        ${!B.high_priority.length && !B.needs_decision.length ? `<div class="card"><b>Nothing needs you right now.</b><div class="meta">Steward keeps watching${B.loop.watching ? " in the background" : ""}; new events appear here by themselves.</div></div>` : ""}
+        ${section("⚠️ High priority", high, draftCard, "high")}
+        ${section("📬 Needs your decision", normal, draftCard)}
+        ${section("✅ Handled automatically", handled, handledCard)}
+        ${B.handled_silently.length ? `<div class="empty">+ ${B.handled_silently.length} handled silently under rules you set to "act silently" (see Decisions).</div>` : ""}
+        ${section("🧠 Suggested automation", B.suggestions, proposalCard)}
+      </div>
+      <aside class="side">
+        <div class="card"><h3>📅 Upcoming meetings</h3>${meetings}</div>
+        <div class="card"><h3>📈 Pipeline</h3><div class="chips">${stages}</div></div>
+        ${flight ? `<div class="card"><h3>⏳ In flight</h3>${flight}</div>` : ""}
+        ${fyi ? `<div class="card"><h3>FYI, no reply needed</h3>${fyi}</div>` : ""}
+        ${c.ignored ? `<div class="meta">${c.ignored} unrelated message(s) ignored.</div>` : ""}
+      </aside>
+    </div>`;
+  const keep = (id, k) => { const el = $(id); el.addEventListener(el.tagName === "INPUT" ? "input" : "change", () => { BF[k] = el.value; store.set("briefFilters", BF); renderBrief(); if (k === "q") { const q = $("#bq"); q.focus(); q.setSelectionRange(q.value.length, q.value.length); } }); };
+  keep("#bq", "q"); keep("#bch", "channel"); keep("#bcat", "category"); keep("#bsort", "sort");
+  const clr = $("#bclear"); if (clr) clr.addEventListener("click", () => { BF.q = ""; BF.channel = ""; BF.category = ""; store.set("briefFilters", BF); renderBrief(); });
+  setTimeout(() => freshIds.clear(), 15000);
+}
+const findDraft = (id) => [...B.high_priority, ...B.needs_decision, ...B.handled_automatically].find(v => v.id === id);
+document.addEventListener("input", (ev) => { if (ev.target.closest(".action, .dontask, .override")) dirty = true; });
+document.addEventListener("click", async (ev) => {
+  const btn = ev.target.closest("[data-do]");
+  if (!btn) return;
+  const card = btn.closest("[data-id], [data-pid]");
+  const what = btn.dataset.do;
+  if (card && card.dataset.pid) {
+    const pid = +card.dataset.pid;
+    if (what === "accept") return act(() => api(`/api/proposals/${pid}`, "POST", { accept: true }), "Accepted.");
+    if (what === "dismiss" || what === "ack") return act(() => api(`/api/proposals/${pid}`, "POST", { accept: false }), what === "ack" ? "" : "Dismissed.");
+  }
+  if (!card) return;
+  const id = +card.dataset.id;
+  const v = findDraft(id);
+  const ranMsg = (r) => r.executed ? `Done: ${r.executed.status}${r.executed.reason ? " — " + r.executed.reason : ""}` : (B.settings.execute_on_approve ? "Approved." : "Approved — it runs when you press Go.");
+  if (what === "approve") return act(() => api(`/api/drafts/${id}/decision`, "POST", { decision: "approve", actions: collectActions(card, v) }), ranMsg);
+  if (what === "reject") {
+    const note = prompt("Why reject it? (optional — this teaches Steward)") ?? null;
+    if (note === null) return;
+    return act(() => api(`/api/drafts/${id}/decision`, "POST", { decision: "reject", note }), "Rejected.");
+  }
+  if (what === "reset") return act(() => api(`/api/drafts/${id}/reset`, "POST", {}), "Back to pending.");
+  if (what === "dontask") {
+    const slot = card.querySelector(".dontask-slot");
+    slot.innerHTML = slot.innerHTML ? "" : dontAskForm(v);
+    const r = slot.querySelector('input[name="minc"]');
+    if (r) r.addEventListener("input", () => { slot.querySelector(".cval").textContent = (+r.value).toFixed(2); });
+    return;
+  }
+  if (what === "cancel-rule") { card.querySelector(".dontask-slot").innerHTML = ""; dirty = false; return; }
+  if (what === "create-rule") {
+    const f = card.querySelector(".dontask");
+    const vals = (n) => [...f.querySelectorAll(`input[name="${n}"]:checked`)].map(x => x.value);
+    const body = { tier: vals("tier")[0] || "auto_approve", technologies: vals("tech"), channels: vals("channel"),
+      sender: vals("sender")[0] || "", company: vals("company")[0] || "", min_confidence: +f.querySelector('input[name="minc"]').value,
+      actions: collectActions(card, v) };
+    card.querySelector(".dontask-slot").innerHTML = "";
+    return act(() => api(`/api/drafts/${id}/dont-ask`, "POST", body), (r) => `Rule “${r.name}” is active. This draft is approved.`);
+  }
+  if (what === "wrong") { card.querySelector(".override").classList.toggle("hidden"); return; }
+  if (what === "override") {
+    const f = card.querySelector(".override");
+    const note = f.querySelector('[name="note"]').value.trim();
+    if (!note) return toast("Say briefly what was wrong.");
+    f.classList.add("hidden");
+    return act(() => api(`/api/drafts/${id}/override`, "POST", { note, corrected: f.querySelector('[name="corrected"]').value }),
+      (r) => r.demoted_to ? `Recorded. The rule now ${r.demoted_to === "shadow" ? "only watches" : "acts and tells you"}.` : "Recorded.");
+  }
+});
+
+// ---------- decisions history ----------
+async function renderHistory() {
+  const rows = await api("/api/history");
+  const host = $("#tab-history");
+  host.innerHTML = `<p class="meta">Every item Steward has handled: what you decided, what it did on its own, and how it turned out. Click a row for the message and what was sent.</p><div id="histTable"></div>`;
+  dataTable($("#histTable"), {
+    id: "history", rows, noun: "decisions", defaultSort: { key: "created", dir: "desc" },
+    columns: [
+      { key: "created", label: "When", value: r => r.created_label, sortValue: r => r.created },
+      { key: "summary", label: "Item", render: r => `<b>${esc(r.summary)}</b><div class="meta">${esc(r.from)}</div>` },
+      { key: "company", label: "Company", filter: "select" },
+      { key: "channel", label: "Channel", filter: "select" },
+      { key: "outcome", label: "Outcome", filter: "select" },
+      { key: "decided_by", label: "Decided by", filter: "select" },
+      { key: "priority", label: "Priority", filter: "select" },
+      { key: "kinds", label: "Kind", value: r => (r.categories || []).map(label).join(", "), filter: "text" },
+      { key: "confidence", label: "Conf.", value: r => (r.confidence ?? 0), render: r => pct(r.confidence) },
+    ],
+    searchExtra: r => `${r.message} ${r.note} ${r.reason}`,
+    onRow: r => `${r.reason ? `<div class="meta"><b>Note:</b> ${esc(r.reason)}</div>` : ""}${r.note ? `<div class="meta"><b>Your note:</b> ${esc(r.note)}</div>` : ""}
+      <details open><summary>Their message</summary><pre class="msg">${esc(r.message)}</pre></details>
+      ${r.actions.map(a => `<details><summary>${esc(label(a.type))}${a.skip ? " (skipped)" : ""}</summary><pre class="msg">${esc(a.payload.body || a.payload.text || JSON.stringify(a.payload, null, 2))}</pre></details>`).join("")}`,
+  });
+}
+
+// ---------- pipeline ----------
+function renderPipeline() {
+  const opts = (cur) => Object.entries(B.stages).map(([k, l]) => `<option value="${k}" ${k === cur ? "selected" : ""}>${esc(l)}</option>`).join("");
+  const host = $("#tab-pipeline");
+  host.innerHTML = `<div class="pill-row">${Object.entries(B.pipeline.by_stage).map(([s, n]) => `<span class="chip ${n ? "info" : ""}">${esc(B.stages[s])}: ${n}</span>`).join("")}</div>
+    <div id="pipeTable"></div>
+    <p class="meta">Moving a thread to “Offer” revokes all autonomy for it. Edits here (or in Notion, if enabled) are what the Decision Router reads.</p>`;
+  const stageOrder = Object.keys(B.stages);
+  dataTable($("#pipeTable"), {
+    id: "pipeline", rows: B.pipeline.opportunities, noun: "opportunities",
+    columns: [
+      { key: "company", label: "Company", filter: "text", render: o => `<b>${esc(o.company || "Unknown")}</b>` },
+      { key: "role", label: "Role", filter: "text" },
+      { key: "stage_label", label: "Stage", filter: "select", sortValue: o => stageOrder.indexOf(o.stage), render: o => `<select data-opp="${o.id}">${opts(o.stage)}</select>` },
+      { key: "recruiter_name", label: "Recruiter", filter: "text", render: o => `${esc(o.recruiter_name || "")}<div class="meta">${esc(o.recruiter_email || o.recruiter_linkedin || o.recruiter_phone || "")}</div>` },
+      { key: "channel", label: "Channel", filter: "select" },
+      { key: "last_contact", label: "Last contact", sortValue: o => -(Date.parse(o.last_inbound_at > o.last_outbound_at ? o.last_inbound_at : o.last_outbound_at) || 0) },
+      { key: "next_action", label: "Next action", filter: "text" },
+    ],
+    afterDraw: (h) => h.querySelectorAll("select[data-opp]").forEach(s => s.addEventListener("change", () =>
+      act(() => api(`/api/pipeline/${s.dataset.opp}`, "POST", { stage: s.value }), "Stage updated."))),
+  });
+}
+
+// ---------- rules ----------
+async function renderRules() {
+  const prefs = await api("/api/preferences");
+  const cal = B.calibration;
+  const host = $("#tab-rules");
+  host.innerHTML = `
+    <h2 class="sec">The autonomy ladder</h2>
+    <p class="meta">Ask me → Act and tell me → Act silently. Every promotion is proposed by Steward and activated only by you. Overrides demote a rule immediately; rules unused for a long time go dormant.</p>
+    <div id="rulesTable"></div>
+    <h2 class="sec">Standing preferences</h2>
+    <p class="meta">Constraints every draft follows (for example “Always add a 15-minute buffer before calls”).</p>
+    <div id="prefTable"></div>
+    <div class="row" style="margin-top:8px"><input type="text" id="newPref" placeholder="Add a preference…" style="flex:1"><button class="btn" id="addPref">Add</button></div>
+    <h2 class="sec">Confidence calibration</h2>
+    <div class="card meta">HIGH band starts at <b>${pct(cal.band_high)}</b>, LOW below <b>${pct(cal.band_low)}</b> · based on ${cal.samples} of your decisions ·
+      ${cal.calibrated ? "calibrated on your own ledger" : "using provisional defaults until at least 20 decisions"}.</div>`;
+  dataTable($("#rulesTable"), {
+    id: "rules", rows: B.rules, noun: "rules",
+    columns: [
+      { key: "name", label: "Rule", filter: "text", render: r => `<b>${esc(r.name)}</b><div class="meta">${esc(r.description)}</div>` },
+      { key: "tier_label", label: "Tier", filter: "select" },
+      { key: "status", label: "Status", filter: "select", render: r => esc(r.status === "shadow" ? `shadow (${r.shadow_agreements} agreeing)` : r.status) },
+      { key: "times_matched", label: "Matched" }, { key: "times_executed", label: "Done" }, { key: "overrides", label: "Overrides" },
+      { key: "min_confidence", label: "Min conf.", render: r => pct(r.min_confidence) },
+      { key: "actions", label: "", sort: false, render: r => {
+        const b = [];
+        if (r.status === "active" && r.tier === "auto_approve") b.push(`<button class="btn small" data-rule="${r.id}" data-a="promote">Let it act silently</button>`);
+        if (r.status === "shadow") b.push(`<button class="btn small" data-rule="${r.id}" data-a="promote">Activate now</button>`);
+        if (r.status === "active") b.push(`<button class="btn small" data-rule="${r.id}" data-a="demote">Demote</button>`);
+        if (r.status === "dormant") b.push(`<button class="btn small" data-rule="${r.id}" data-a="reactivate">Reactivate</button>`);
+        b.push(`<button class="btn small danger" data-rule="${r.id}" data-a="retire">Retire</button>`);
+        return `<div class="row">${b.join("")}</div>`; } },
+    ],
+    empty: "No rules yet. Use “Don't ask again” on a draft, or accept a suggestion.",
+    afterDraw: (h) => h.querySelectorAll("[data-rule]").forEach(b => b.addEventListener("click", () =>
+      act(() => api(`/api/rules/${b.dataset.rule}`, "POST", { action: b.dataset.a }), "Rule updated."))),
+  });
+  dataTable($("#prefTable"), {
+    id: "prefs", rows: prefs, noun: "preferences",
+    columns: [
+      { key: "text", label: "Preference", filter: "text" }, { key: "origin", label: "From", filter: "select" },
+      { key: "created_at", label: "Added", render: p => esc(new Date(p.created_at).toLocaleDateString()) },
+      { key: "x", label: "", sort: false, render: p => `<button class="btn small danger" data-pref="${p.id}">Retire</button>` },
+    ],
+    empty: "None yet.",
+    afterDraw: (h) => h.querySelectorAll("[data-pref]").forEach(b => b.addEventListener("click", () =>
+      act(() => api(`/api/preferences/${b.dataset.pref}/retire`, "POST", {}), "Preference retired."))),
+  });
+  $("#addPref").addEventListener("click", () => {
+    const text = $("#newPref").value.trim();
+    if (text) act(() => api("/api/preferences", "POST", { text }), "Preference added.");
+  });
+}
+
+// ---------- ledger ----------
+async function renderLedger() {
+  const [entries, ver] = await Promise.all([api("/api/ledger?limit=2000"), api("/api/ledger/verify")]);
+  const what = (e) => { const p = e.payload; return p.decision || p.change || p.status || p.kind || ""; };
+  const host = $("#tab-ledger");
+  host.innerHTML = `
+    <div class="card ${ver.ok ? "" : "high"}"><b>${ver.ok ? "✓ Ledger intact" : "✗ Ledger broken"}</b>
+      <div class="meta">${ver.ok ? `${ver.entries} entries, hash-chained. Head ${esc((ver.head || "").slice(0, 20))}…` : `Broken at entry ${ver.broken_at}: ${esc(ver.reason)}`}</div>
+      <div class="meta">Every action traces to a draft, a decision, and an entry here. The learner trains only on this ledger.</div></div>
+    <div id="ledgerTable"></div>`;
+  dataTable($("#ledgerTable"), {
+    id: "ledger", rows: entries.map(e => ({ ...e, what: what(e), when: new Date(e.ts).toLocaleString() })), rowKey: "seq", noun: "entries",
+    defaultSort: { key: "seq", dir: "desc" },
+    columns: [
+      { key: "seq", label: "#", render: e => `<span class="mono">${e.seq}</span>` },
+      { key: "when", label: "When", sortValue: e => e.ts },
+      { key: "kind", label: "Kind", filter: "select" },
+      { key: "what", label: "What", filter: "select" },
+      { key: "draft_id", label: "Draft", filter: "text" },
+      { key: "rule_id", label: "Rule", filter: "text" },
+    ],
+    searchExtra: e => JSON.stringify(e.payload),
+    onRow: e => `<pre class="msg mono">${esc(JSON.stringify(e.payload, null, 2))}</pre>`,
+  });
+}
+
+// ---------- setup ----------
+async function renderSetup() {
+  const S = await api("/api/setup");
+  const v = S.values, host = $("#tab-setup");
+  const status = (id) => S.checks.find(c => c.id === id) || {};
+  const chip = (s) => ({ ok: `<span class="chip ok">Ready</span>`, todo: `<span class="chip warn">Needs you</span>`, warn: `<span class="chip warn">Check</span>`, off: `<span class="chip">Optional · off</span>` })[s] || "";
+  const ready = S.checks.filter(c => c.status === "ok").length;
+  const field = (key, lbl, type = "text", hint = "") => {
+    const val = Array.isArray(v[key]) ? v[key].join(", ") : (v[key] ?? "");
+    if (type === "textarea") return `<div class="field"><label>${lbl}</label><textarea data-k="${key}" rows="2">${esc(val)}</textarea>${hint ? `<div class="meta">${hint}</div>` : ""}</div>`;
+    if (Array.isArray(type)) return `<div class="field"><label>${lbl}</label><select data-k="${key}">${type.map(o => `<option ${o === val ? "selected" : ""}>${o}</option>`).join("")}</select>${hint ? `<div class="meta">${hint}</div>` : ""}</div>`;
+    return `<div class="field"><label>${lbl}</label><input type="text" data-k="${key}" ${Array.isArray(v[key]) ? 'data-list="1"' : ""} value="${esc(val)}">${hint ? `<div class="meta">${hint}</div>` : ""}</div>`;
+  };
+  const secret = (name) => `<div class="field"><label>${esc(S.secret_labels[name] || name)} ${S.secrets[name] ? '<span class="chip ok">saved</span>' : '<span class="chip warn">not set</span>'}</label>
+      <div class="row"><input type="password" data-secret="${name}" placeholder="${S.secrets[name] ? "Saved. Paste a new value to replace it" : "Paste here"}" style="flex:1" autocomplete="off"><button class="btn small" data-save-secret="${name}">Save</button></div></div>`;
+  const save = (keys, btnLabel = "Save") => `<button class="btn small primary" data-save="${keys.join(",")}">${btnLabel}</button>`;
+  const test = (name) => `<button class="btn small" data-test="${name}">Test connection</button><span class="result" data-result="${name}"></span>`;
+  const step = (n, id, title, body) => { const c = status(id); return `<div class="card step ${c.status || ""}"><div class="num">${n}</div><div>
+      <div class="card-head"><h3>${esc(title)}</h3>${chip(c.status)}</div><div class="meta">${esc(c.detail || "")}</div>
+      ${c.status && c.status !== "ok" && c.fix ? `<div class="meta">→ ${esc(c.fix)}</div>` : ""}<div class="form">${body}</div></div></div>`; };
+  const tzGuess = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  host.innerHTML = `
+    <div class="card"><b>${ready} of ${S.checks.length} ready.</b> <span class="meta">Settings are saved to <span class="mono">${esc(S.paths.config)}</span>; secrets to <span class="mono">${esc(S.paths.env)}</span> (never shown again). Full guide: SETUP.md in the project folder.</span></div>
+    ${step(1, "profile", "Your profile (the only non-CV facts drafts may state)", `<div class="grid2">
+        ${field("profile.name", "Name")}${field("profile.email", "Email")}
+        ${field("profile.timezone", "Time zone (IANA)", "text", tzGuess ? `This computer: <a href="#" data-tz="${esc(tzGuess)}">${esc(tzGuess)}</a>` : "")}
+        ${field("profile.headline", "Headline")}
+        ${field("profile.target_roles", "Target roles (comma-separated)")}${field("profile.preferred_locations", "Preferred locations (comma-separated)")}
+        ${field("profile.remote_preference", "Remote preference")}${field("profile.work_authorization", "Work authorization", "text", "e.g. US citizen; or: Mexican citizen, needs H-1B/TN sponsorship")}
+        ${field("profile.notice_period", "Notice period / start date", "text", "e.g. I can start two weeks after accepting an offer.")}
+        ${field("profile.relocation", "Relocation stance")}
+        ${field("profile.linkedin_url", "LinkedIn profile URL")}${field("profile.signature", "Signature (how replies are signed)")}
+        ${field("profile.salary_policy", "Salary policy (what drafts say about pay)", "textarea")}
+        ${field("profile.salary_expectation_private", "Your salary expectation (private, never sent)", "textarea")}
+        ${field("profile.facts", "Other facts drafts may state (comma-separated)", "textarea")}
+      </div><div class="buttons">${save(["profile.name", "profile.email", "profile.timezone", "profile.headline", "profile.target_roles", "profile.preferred_locations", "profile.remote_preference", "profile.work_authorization", "profile.notice_period", "profile.relocation", "profile.linkedin_url", "profile.signature", "profile.salary_policy", "profile.salary_expectation_private", "profile.facts"], "Save profile")}</div>`)}
+    ${step(2, "cv", "Your CV", `<div class="meta">File: <span class="mono">${esc(S.paths.cv)}</span>. Edit it in any text editor; changes apply on the next message. ${test("cv")}</div>`)}
+    ${step(3, "llm", "Claude", v["llm.provider"] === "claude-code"
+      ? `<div class="meta">Uses your Claude Pro/Max subscription through the official Claude Code program, so no API key is needed and usage counts toward your plan's limits. Opus gives the best drafts; Sonnet stretches your limits further.</div>
+         <div class="grid2">${field("llm.provider", "Provider", ["claude-code", "anthropic", "grok", "offline"], "claude-code = your subscription")}${field("llm.claude_code_model", "Model", ["opus", "sonnet", "haiku"])}</div>
+         <div class="buttons">${save(["llm.provider", "llm.claude_code_model"])} ${test("llm")}</div>`
+      : `<div class="grid2">${field("llm.provider", "Provider", ["claude-code", "anthropic", "grok", "offline"], "claude-code = your subscription, no key")}${field("llm.model", "Model")}</div>
+         ${v["llm.provider"] === "anthropic" ? secret("ANTHROPIC_API_KEY") : ""}<div class="buttons">${save(["llm.provider", "llm.model"])} ${test("llm")}</div>`)}
+    ${step(4, "mail", "Email (IMAP/SMTP)", `<div class="grid2">${field("mail.backend", "Backend", ["imap", "sandbox", "disabled"])}${field("mail.username", "Email address")}
+      ${field("mail.imap_host", "IMAP host")}${field("mail.smtp_host", "SMTP host")}${field("mail.folder", "Folder / Gmail label to watch", "text", "INBOX, or a label like Recruiters")}</div>
+      ${secret("STEWARD_MAIL_PASSWORD")}<div class="buttons">${save(["mail.backend", "mail.username", "mail.imap_host", "mail.smtp_host", "mail.folder"])} ${test("mail")}</div>`)}
+    ${step(5, "calendar", "Google Calendar", `<div class="grid2">${field("calendar.backend", "Backend", ["google", "sandbox", "disabled"])}
+      ${field("scheduling.work_start", "Working hours start")}${field("scheduling.work_end", "Working hours end")}${field("scheduling.buffer_minutes", "Buffer around meetings (minutes)")}</div>
+      <div class="meta">OAuth client file: <span class="mono">${esc(S.paths.google_credentials)}</span></div>
+      <div class="buttons">${save(["calendar.backend", "scheduling.work_start", "scheduling.work_end", "scheduling.buffer_minutes"])}
+      <button class="btn small" id="googleBtn">Connect Google Calendar</button> ${test("calendar")}</div>`)}
+    ${step(6, "linkedin", "LinkedIn (through your own Chrome)", `<div class="meta">Install the linkedin-toolkit Chrome extension and pair it (SETUP.md step 6), then:</div>
+      <div class="grid2">${field("linkedin.backend", "Backend", ["disabled", "upstream", "sandbox"])}</div>
+      <div class="buttons"><button class="btn small primary" id="liUse">Use linkedin-toolkit</button>${save(["linkedin.backend"], "Save backend")} ${test("linkedin")}</div>`)}
+    ${step(7, "notion", "Notion pipeline (optional)", `${secret("NOTION_TOKEN")}
+      <div class="row"><input type="text" id="notionPage" placeholder="Link to a Notion page shared with your integration" style="flex:1"><button class="btn small" id="notionBtn">Create the pipeline database</button></div>
+      <div class="buttons">${test("notion")}</div>`)}
+    ${step(8, "notifications", "Phone notifications (optional)", `<div class="grid2">${field("notifications.ntfy_url", "ntfy topic URL", "text", "e.g. https://ntfy.sh/your-long-random-topic")}${field("notifications.telegram_chat_id", "Telegram chat id")}${field("notifications.quiet_hours", "Quiet hours")}</div>
+      ${secret("TELEGRAM_BOT_TOKEN")}<div class="buttons"><button class="btn small primary" id="notifSave">Save</button></div>`)}
+    ${step(9, "autostart", "Start when you log in", `<label class="switch"><input type="checkbox" id="autoStart" ${S.autostart ? "checked" : ""} ${S.autostart_supported ? "" : "disabled"}> Start Steward automatically at Windows login (keeps watching even if this window is closed)</label>`)}
+  `;
+  host.querySelectorAll("[data-tz]").forEach(a => a.addEventListener("click", (e) => { e.preventDefault(); host.querySelector('[data-k="profile.timezone"]').value = a.dataset.tz; }));
+  host.querySelectorAll("[data-save]").forEach(b => b.addEventListener("click", () => {
+    const changes = {};
+    b.dataset.save.split(",").forEach(k => {
+      const el = host.querySelector(`[data-k="${k}"]`);
+      if (!el) return;
+      let val = el.value;
+      if (el.dataset.list || ["profile.target_roles", "profile.preferred_locations", "profile.facts"].includes(k)) val = val.split(",").map(x => x.trim()).filter(Boolean);
+      if (k === "scheduling.buffer_minutes") val = parseInt(val || "0", 10);
+      changes[k] = val;
+    });
+    act(() => api("/api/setup/config", "POST", { changes }), "Saved.").then(renderSetup);
+  }));
+  host.querySelectorAll("[data-save-secret]").forEach(b => b.addEventListener("click", () => {
+    const name = b.dataset.saveSecret, el = host.querySelector(`[data-secret="${name}"]`);
+    if (!el.value.trim()) return toast("Paste the value first.");
+    act(() => api("/api/setup/secret", "POST", { name, value: el.value }), "Saved to .env.").then(renderSetup);
+  }));
+  host.querySelectorAll("[data-test]").forEach(b => b.addEventListener("click", async () => {
+    const out = host.querySelector(`[data-result="${b.dataset.test}"]`);
+    out.className = "result"; out.textContent = " Testing…";
+    try { const r = await api(`/api/setup/probe/${b.dataset.test}`, "POST", {}); out.className = "result " + (r.ok ? "ok" : "bad"); out.textContent = " " + r.detail; }
+    catch (e) { out.className = "result bad"; out.textContent = " " + e.message; }
+  }));
+  $("#googleBtn").addEventListener("click", () => { toast("A Google sign-in page opens in your browser. Finish it there.", 8000); act(() => api("/api/setup/google-auth", "POST", {}), "Google Calendar connected.").then(renderSetup); });
+  $("#liUse").addEventListener("click", () => act(() => api("/api/setup/config", "POST", { changes: { "linkedin.backend": "upstream", "linkedin.upstream": { command: "npx", args: ["linkedin-toolkit-mcp"] } } }), "LinkedIn set to linkedin-toolkit. Press Test connection.").then(renderSetup));
+  $("#notionBtn").addEventListener("click", () => { const page = $("#notionPage").value.trim(); if (!page) return toast("Paste the Notion page link first."); act(() => api("/api/setup/notion", "POST", { page }), (r) => `Notion database created${r.url ? ": " + r.url : ""}.`).then(renderSetup); });
+  $("#notifSave").addEventListener("click", () => {
+    const ntfy = host.querySelector('[data-k="notifications.ntfy_url"]').value.trim(), chat = host.querySelector('[data-k="notifications.telegram_chat_id"]').value.trim();
+    const channels = [...(ntfy ? ["ntfy"] : []), ...(chat ? ["telegram"] : [])];
+    act(() => api("/api/setup/config", "POST", { changes: { "notifications.ntfy_url": ntfy, "notifications.telegram_chat_id": chat, "notifications.channels": channels, "notifications.quiet_hours": host.querySelector('[data-k="notifications.quiet_hours"]').value } }), "Saved.").then(renderSetup);
+  });
+  const as = $("#autoStart"); if (as) as.addEventListener("change", () => act(() => api("/api/setup/autostart", "POST", { enable: as.checked }), as.checked ? "Steward will start when you log in." : "Start-at-login removed.").then(renderSetup));
+}
+
+// ---------- wiring ----------
+$("#tabs").addEventListener("click", (ev) => {
+  const b = ev.target.closest("button[data-tab]");
+  if (!b) return;
+  tab = b.dataset.tab;
+  store.set("tab", tab);
+  document.querySelectorAll("#tabs button").forEach(x => x.classList.toggle("on", x === b));
+  document.querySelectorAll("main > section").forEach(s => s.classList.toggle("hidden", s.id !== "tab-" + tab));
+  if (tab === "ledger") renderLedger(); else if (tab === "setup") renderSetup(); else refresh(true);
+});
+$("#liveShow").addEventListener("click", () => { dirty = false; refresh(true); });
+$("#pollBtn").addEventListener("click", async () => {
+  const b = $("#pollBtn"); b.disabled = true; b.textContent = "Checking…";
+  await act(() => api("/api/poll", "POST", {}), (r) => `Checked: ${r.processed} new item(s), ${r.auto_executed} handled automatically.`);
+  b.disabled = false; b.textContent = "Check now";
+});
+$("#goBtn").addEventListener("click", async () => {
+  const c = B.counts;
+  if (!confirm(`Execute ${c.staged} decision(s) now? Approved replies will be sent and meetings booked.`)) return;
+  const b = $("#goBtn"); b.disabled = true; b.textContent = "Executing…";
+  await act(() => api("/api/go", "POST", {}), (r) => `Done: ${r.executed} executed, ${r.deferred} deferred (LinkedIn pacing), ${r.failed} failed.`);
+});
+$("#instant").addEventListener("change", (e) => act(() => api("/api/settings", "POST", { execute_on_approve: e.target.checked }),
+  e.target.checked ? "Each approval now runs immediately." : "Approvals now wait for Go."));
+$("#alertsBtn").addEventListener("click", async () => {
+  if (!("Notification" in window)) return toast("This browser does not support desktop notifications.");
+  const p = await Notification.requestPermission();
+  toast(p === "granted" ? "Desktop alerts on: you'll be notified when something needs you." : "Desktop alerts are blocked in this browser.");
+});
+const savedTab = store.get("tab", "brief");
+if (savedTab !== "brief") { const b = document.querySelector(`#tabs button[data-tab="${savedTab}"]`); if (b) b.click(); }
+refresh(true).then(startStream);
+setInterval(() => { if (tab === "brief") refresh(); }, 60000);
+</script>
+</body>
+</html>
