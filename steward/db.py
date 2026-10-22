@@ -131,6 +131,25 @@ CREATE TABLE IF NOT EXISTS preferences (
     updated_at TEXT NOT NULL
 );
 
+-- Things only you can do: take an assessment, fill a form, prepare a document, apply via a link.
+CREATE TABLE IF NOT EXISTS tasks (
+    id INTEGER PRIMARY KEY,
+    title TEXT NOT NULL,
+    details TEXT,
+    kind TEXT NOT NULL DEFAULT 'other',   -- assessment | form | document | application | prepare | other
+    link TEXT,
+    due_at TEXT,
+    status TEXT NOT NULL DEFAULT 'open',  -- suggested | open | done | dismissed
+    origin TEXT NOT NULL,                 -- steward | you
+    opportunity_id INTEGER,
+    event_id INTEGER,
+    draft_id INTEGER,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+
 CREATE TABLE IF NOT EXISTS proposals (
     id INTEGER PRIMARY KEY,
     kind TEXT NOT NULL,                   -- new_rule | promote_rule | review_rule | new_preference | rule_graduated | rule_dormant
@@ -230,6 +249,9 @@ MIGRATIONS = [
     ("drafts", "priority_score", "REAL"),
     ("drafts", "priority_why_json", "TEXT"),
     ("opportunities", "recruiter_phone", "TEXT"),
+    ("preferences", "company", "TEXT"),
+    ("preferences", "sender", "TEXT"),
+    ("drafts", "revised_from", "INTEGER"),
 ]
 
 

@@ -192,6 +192,15 @@ Turn this on so Steward keeps watching even when its window is closed. Turning i
   "New updates" banner instead of disturbing you.
 - **Your part**: read the briefing, then Approve / edit / Reject / "Don't ask again", and press **Go**. To send
   each approval immediately instead, switch on **Act on each approval immediately** at the top.
-- Join the meetings it books (they appear under *Upcoming meetings* with join links).
+- **Steer it in your own words**: each item has *"Or tell Steward what to do instead"*. Write the instruction,
+  press *Revise with my instruction*, and Steward rewrites the reply and any meeting, task, or stage changes, then
+  shows the new version (marked ✎ revised) for your approval. Each item also has *"Teach Steward a rule"* for how
+  it should respond next time, applied to messages like this one, one company, one recruiter, or everything.
+- **Tasks**: when a recruiter asks you to take an assessment, fill a form, prepare a document, or apply through
+  another link, the item shows a suggested task. *Add to my tasks* puts it in the **Tasks** tab (check it off when
+  done; you can also add your own). Deadlines appear under *Upcoming meetings & deadlines*, you get reminders a day
+  and two hours before (if notifications are on), and items with close deadlines move up the queue. Due times use
+  the time zone from your profile.
+- Join the meetings it books (they appear under *Upcoming meetings & deadlines* with join links).
 
 All the CLI commands still work (`steward brief`, `steward go`, ...) if you ever want them.

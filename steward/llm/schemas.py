@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from steward.taxonomy import CATEGORIES, QUESTION_TYPES, STAGE_SIGNALS
+from steward.taxonomy import CATEGORIES, QUESTION_TYPES, STAGE_SIGNALS, STAGES, TASK_KINDS
 
 
 def obj(props: dict[str, Any]) -> dict[str, Any]:
@@ -19,6 +19,16 @@ STR = {"type": "string"}
 NUM = {"type": "number"}
 BOOL = {"type": "boolean"}
 CATEGORY = {"type": "string", "enum": list(CATEGORIES)}
+
+TASK = obj(
+    {
+        "title": STR,
+        "kind": {"type": "string", "enum": list(TASK_KINDS)},
+        "due": STR,
+        "link": STR,
+        "details": STR,
+    }
+)
 
 CLASSIFY_SCHEMA = obj(
     {
@@ -48,6 +58,7 @@ CLASSIFY_SCHEMA = obj(
         "stage_signal": {"type": "string", "enum": STAGE_SIGNALS},
         "urgency": {"type": "string", "enum": ["low", "normal", "high"]},
         "suspicious": BOOL,
+        "candidate_tasks": arr(TASK),
     }
 )
 
@@ -80,5 +91,19 @@ DISTILL_SCHEMA = obj(
         "preference": STR,
         "categories": arr(CATEGORY),
         "confidence": NUM,
+    }
+)
+
+INSTRUCT_SCHEMA = obj(
+    {
+        "reply_needed": BOOL,
+        "reply_guidance": STR,
+        "meeting_action": {"type": "string",
+                           "enum": ["keep", "none", "book", "propose_times", "find_times", "accept_invite",
+                                    "decline_invite"]},
+        "times": arr(obj({"start": STR, "end": STR})),
+        "tasks": arr(TASK),
+        "stage": {"type": "string", "enum": ["none", *STAGES]},
+        "summary": STR,
     }
 )

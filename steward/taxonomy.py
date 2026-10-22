@@ -102,6 +102,16 @@ TIER_LABELS = {
 
 ACTION_TYPES = ["send_email", "send_linkedin", "create_event", "rsvp_event"]
 
+# Things only the candidate can do (they become tasks, never automated actions).
+TASK_KINDS = {
+    "assessment": "Assessment",
+    "form": "Form",
+    "document": "Document",
+    "application": "Application",
+    "prepare": "Preparation",
+    "other": "Other",
+}
+
 
 def risk_of(categories: list[str]) -> str:
     level = "low"

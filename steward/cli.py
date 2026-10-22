@@ -581,6 +581,69 @@ def prefs(add: str = typer.Option("", "--add", help="Add a standing instruction 
 
 
 @app.command()
+def tasks(add: str = typer.Option("", "--add", help="Add a task with this title"),
+          due: str = typer.Option("", help="Due date/time for --add, e.g. 2026-10-30T17:00"),
+          link: str = typer.Option("", help="Link for --add"),
+          done: Optional[int] = typer.Option(None, "--done", help="Mark a task done"),
+          reopen: Optional[int] = typer.Option(None, "--reopen", help="Reopen a task"),
+          accept: Optional[int] = typer.Option(None, "--accept", help="Accept a task Steward suggested"),
+          dismiss: Optional[int] = typer.Option(None, "--dismiss", help="Dismiss a task"),
+          search: str = typer.Option("", help="Only tasks containing this text")) -> None:
+    """Your to-do list: assessments, forms, documents, applications."""
+    from steward import tasks as tasks_mod
+
+    c, db, led = _db_ledger()
+    try:
+        if add:
+            tasks_mod.add(c, db, led, add, due_at=due or None, link=link)
+        for task_id, action in ((done, "done"), (reopen, "reopen"), (accept, "accept"), (dismiss, "dismiss")):
+            if task_id is not None:
+                tasks_mod.act(c, db, led, task_id, action)
+    except tasks_mod.TaskError as exc:
+        fail(str(exc))
+    t = Table(title="Tasks")
+    for col in ("#", "Status", "Task", "Kind", "Opportunity", "Due", "Link"):
+        t.add_column(col)
+    for row in tasks_mod.listing(c, db):
+        if not _matches(search, row["title"], row["details"], row["company"]):
+            continue
+        due_txt = ("OVERDUE " if row["overdue"] else "") + row["due_label"]
+        t.add_row(str(row["id"]), row["status"], escape(row["title"]), row["kind_label"], escape(row["company"]),
+                  due_txt, escape(row["link"] or ""))
+    console.print(t)
+
+
+@app.command()
+def instruct(draft_id: int, instruction: str = typer.Argument(..., help="What Steward should do instead")) -> None:
+    """Tell Steward what to do instead of its draft; it rewrites the reply and actions for your approval."""
+    s = steward_obj()
+    try:
+        res = asyncio.run(s.revise(draft_id, instruction=instruction))
+    except decisions.DecisionError as exc:
+        fail(str(exc))
+    console.print(f"[green]Revised as #{res['draft_id']}:[/green] {escape(res['summary'])}")
+    for w in res["warnings"]:
+        console.print(f"[yellow]! {escape(w)}[/yellow]")
+    show(res["draft_id"])
+
+
+@app.command()
+def teach(draft_id: int, rule: str = typer.Argument(..., help="How Steward should respond next time"),
+          scope: str = typer.Option("kind", help="kind (messages like this), company, sender, or all"),
+          redraft: bool = typer.Option(False, "--redraft", help="Also re-draft this item with the rule")) -> None:
+    """Save a rule from a briefing item that shapes future replies."""
+    c, db, led = _db_ledger()
+    try:
+        res = decisions.teach_rule(db, led, draft_id, rule, scope)
+    except decisions.DecisionError as exc:
+        fail(str(exc))
+    console.print(f"[green]Rule saved[/green] for {escape(res['applies_to'])}.")
+    if redraft:
+        out = asyncio.run(steward_obj().revise(draft_id, reason=f"Re-drafted with your new rule: “{rule}”"))
+        console.print(f"Re-drafted as #{out['draft_id']}.")
+
+
+@app.command()
 def pipeline(csv_out: Optional[Path] = typer.Option(None, "--csv", help="Export to CSV"),
              set_stage: Optional[str] = typer.Option(None, "--set-stage", help="Stage to set (needs --id)"),
              opp_id: Optional[int] = typer.Option(None, "--id"),

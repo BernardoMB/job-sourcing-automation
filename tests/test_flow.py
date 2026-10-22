@@ -16,7 +16,7 @@ from .conftest import drafts_by_company, run, sandbox_json
 def test_walk_away_brief_decide_go(steward):
     summary = run(steward.cycle(force=True))
     assert summary["errors"] == []
-    assert summary["ingested"]["email"] == 6 and summary["ingested"]["linkedin"] == 2
+    assert summary["ingested"]["email"] == 7 and summary["ingested"]["linkedin"] == 2
     assert summary["ingested"]["calendar"] == 1
     assert summary["auto_executed"] == 0  # nothing is earned yet: everything waits for you
 

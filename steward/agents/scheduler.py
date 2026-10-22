@@ -15,7 +15,7 @@ from steward.timeutil import fmt_range, parse_iso, to_iso, utcnow
 SCHEDULING_CATEGORIES = {"availability_request", "interview_request"}
 
 
-def _label(ctx: AgentContext, start: str, end: str) -> str:
+def label(ctx: AgentContext, start: str, end: str) -> str:
     return fmt_range(start, end, ctx.cfg.profile.timezone)
 
 
@@ -27,12 +27,12 @@ def meeting_title(ctx: AgentContext, cls: dict[str, Any], event: dict[str, Any])
     )
 
 
-async def _slots(ctx: AgentContext, start, end, duration: int) -> list[dict[str, str]]:
+async def slots_between(ctx: AgentContext, start, end, duration: int) -> list[dict[str, str]]:
     res = await ctx.hub.call("calendar", "find_free_slots", {
         "window_start": to_iso(start), "window_end": to_iso(end), "duration_minutes": duration,
         "max_slots": ctx.cfg.scheduling.max_slots,
     })
-    return [{**s, "label": _label(ctx, s["start"], s["end"])} for s in res.get("slots", [])]
+    return [{**s, "label": label(ctx, s["start"], s["end"])} for s in res.get("slots", [])]
 
 
 async def plan(ctx: AgentContext, event: dict[str, Any], cls: dict[str, Any]) -> dict[str, Any]:
@@ -54,16 +54,16 @@ async def plan(ctx: AgentContext, event: dict[str, Any], cls: dict[str, Any]) ->
                 "start": raw["start"], "end": raw["end"], "buffer_minutes": 0})
             others = [c for c in check.get("conflicts", []) if c.get("id") != raw.get("id")]
             result["checks"].append({"start": raw["start"], "end": raw["end"], "free": not others,
-                                     "label": _label(ctx, raw["start"], raw["end"]), "conflicts": others,
+                                     "label": label(ctx, raw["start"], raw["end"]), "conflicts": others,
                                      "problems": check.get("problems", [])})
             if others:
                 result["kind"] = "invite_conflict"
                 s = parse_iso(raw["start"]) or now
-                result["slots"] = await _slots(ctx, max(now, s - timedelta(days=1)),
+                result["slots"] = await slots_between(ctx, max(now, s - timedelta(days=1)),
                                                s + timedelta(days=sch.lookahead_days), sch.default_duration_minutes)
         else:
             result["kind"] = "propose_slots"
-            result["slots"] = await _slots(ctx, now, now + timedelta(days=sch.lookahead_days),
+            result["slots"] = await slots_between(ctx, now, now + timedelta(days=sch.lookahead_days),
                                            sch.default_duration_minutes)
         return result
 
@@ -73,16 +73,16 @@ async def plan(ctx: AgentContext, event: dict[str, Any], cls: dict[str, Any]) ->
         check = await ctx.hub.call("calendar", "check_availability", {
             "start": start, "end": end, "buffer_minutes": 0})
         others = [c for c in check.get("conflicts", []) if c.get("id") != raw.get("id")]
-        result["checks"].append({"start": start, "end": end, "label": _label(ctx, start, end),
+        result["checks"].append({"start": start, "end": end, "label": label(ctx, start, end),
                                  "free": not others, "conflicts": others, "problems": check.get("problems", [])})
         if not others:
             result["kind"] = "invite_accept"
             result["rsvp"] = {"event_id": raw.get("id"), "response": "accepted"}
-            result["accepted_label"] = _label(ctx, start, end)
+            result["accepted_label"] = label(ctx, start, end)
         else:
             result["kind"] = "invite_conflict"
             s = parse_iso(start) or now
-            result["slots"] = await _slots(ctx, max(now, s - timedelta(days=1)), s + timedelta(days=sch.lookahead_days),
+            result["slots"] = await slots_between(ctx, max(now, s - timedelta(days=1)), s + timedelta(days=sch.lookahead_days),
                                            int(((parse_iso(end) or s) - s).total_seconds() // 60) or 30)
         return result
 
@@ -98,13 +98,13 @@ async def plan(ctx: AgentContext, event: dict[str, Any], cls: dict[str, Any]) ->
             if s and s < now + timedelta(hours=sch.min_notice_hours):
                 problems.append("too short notice")
             ok = check.get("free") and not problems
-            result["checks"].append({**t, "label": _label(ctx, t["start"], t["end"]), "free": bool(check.get("free")),
+            result["checks"].append({**t, "label": label(ctx, t["start"], t["end"]), "free": bool(check.get("free")),
                                      "conflicts": check.get("conflicts", []), "problems": problems, "ok": ok})
             if ok and accepted is None:
                 accepted = t
         if accepted:
             result["kind"] = "accept_proposed"
-            result["accepted_label"] = _label(ctx, accepted["start"], accepted["end"])
+            result["accepted_label"] = label(ctx, accepted["start"], accepted["end"])
             if sch.book_on_accept and event.get("sender_address"):
                 result["booking"] = {
                     "title": meeting_title(ctx, cls, event),
@@ -120,7 +120,7 @@ async def plan(ctx: AgentContext, event: dict[str, Any], cls: dict[str, Any]) ->
                 sch.default_duration_minutes
             window_start = max(now, first - timedelta(days=1))
             result["kind"] = "conflict_counter"
-            result["slots"] = await _slots(ctx, window_start, window_start + timedelta(days=sch.lookahead_days),
+            result["slots"] = await slots_between(ctx, window_start, window_start + timedelta(days=sch.lookahead_days),
                                            duration)
         return result
 
@@ -128,7 +128,7 @@ async def plan(ctx: AgentContext, event: dict[str, Any], cls: dict[str, Any]) ->
     if cats & (SCHEDULING_CATEGORIES | {"call_notification"}) or \
             any(q["type"] == "availability" for q in cls.get("questions", [])):
         result["kind"] = "propose_slots"
-        result["slots"] = await _slots(ctx, now, now + timedelta(days=sch.lookahead_days), sch.default_duration_minutes)
+        result["slots"] = await slots_between(ctx, now, now + timedelta(days=sch.lookahead_days), sch.default_duration_minutes)
         if not result["slots"]:
             result["notes"].append("No free slots found in the lookahead window.")
     return result

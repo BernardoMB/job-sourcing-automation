@@ -126,6 +126,16 @@ tr.detail td { background: var(--bg); }
 .step .num { width: 26px; height: 26px; border-radius: 50%; background: var(--line); display: grid; place-items: center; font-weight: 700; font-size: 13px; }
 .step.ok .num { background: var(--ok-soft); color: var(--ok); }
 .step.todo .num { background: var(--warn-soft); color: var(--warn); }
+.steer, .teach { margin-top: 10px; }
+.steer label, .teach label { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 4px; }
+.steer textarea, .teach textarea { width: 100%; min-height: 54px; resize: vertical; }
+.tasklist { border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; margin: 8px 0; }
+.taskrow { display: flex; gap: 8px; align-items: flex-start; flex-wrap: wrap; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.taskrow:last-child { border-bottom: 0; }
+.taskrow .what { flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; }
+.done-text { text-decoration: line-through; color: var(--muted); }
+.overdue { color: var(--high); font-weight: 600; }
+.duesoon { color: var(--warn); font-weight: 600; }
 .result { font-size: 13px; margin-top: 6px; }
 .result.ok { color: var(--ok); } .result.bad { color: var(--high); }
 </style>
@@ -141,6 +151,7 @@ tr.detail td { background: var(--bg); }
   </div>
   <nav class="tabs" id="tabs">
     <button data-tab="brief" class="on">Briefing <span class="badge hidden" id="badge"></span></button>
+    <button data-tab="tasks">Tasks <span class="badge hidden" id="taskBadge"></span></button>
     <button data-tab="history">Decisions</button>
     <button data-tab="pipeline">Pipeline</button>
     <button data-tab="rules">Rules &amp; learning</button>
@@ -152,6 +163,7 @@ tr.detail td { background: var(--bg); }
   <div id="pauseBanner" class="banner hidden" style="background:var(--warn-soft);color:var(--warn)"></div>
   <div id="liveBanner" class="banner hidden"><span id="liveText"></span><button class="btn small" id="liveShow">Show</button></div>
   <section id="tab-brief"></section>
+  <section id="tab-tasks" class="hidden"></section>
   <section id="tab-history" class="hidden"></section>
   <section id="tab-pipeline" class="hidden"></section>
   <section id="tab-rules" class="hidden"></section>
@@ -273,6 +285,7 @@ async function refresh(force) {
   if (tab === "pipeline") renderPipeline();
   if (tab === "rules") renderRules();
   if (tab === "history") renderHistory();
+  if (tab === "tasks") renderTasks();
 }
 function isEditing() {
   return dirty || !!document.querySelector(".dontask, .override:not(.hidden)") ||
@@ -294,6 +307,9 @@ function renderHeader() {
   $("#instant").checked = !!B.settings.execute_on_approve;
   const badge = $("#badge");
   badge.textContent = c.undecided; badge.classList.toggle("hidden", !c.undecided);
+  const tb = $("#taskBadge"), tn = (c.tasks_open || 0) + (c.tasks_suggested || 0);
+  tb.textContent = tn; tb.classList.toggle("hidden", !tn);
+  tb.title = `${c.tasks_open || 0} open, ${c.tasks_suggested || 0} suggested, ${c.tasks_due_soon || 0} due within 48 h or overdue`;
   document.title = c.undecided ? `(${c.undecided}) The Steward` : "The Steward";
 }
 function notifyDesktop(title, body) {
@@ -417,7 +433,7 @@ function draftCard(v) {
        <button class="btn small danger" data-do="reject">Reject</button>
        ${v.actions.length ? `<button class="btn small" data-do="dontask">Don't ask again…</button>` : ""}`;
   return `<article class="card ${v.priority === "high" ? "high" : ""} ${decided ? "decided" : ""} ${freshIds.has(v.id) ? "fresh" : ""}" data-id="${v.id}">
-    <div class="card-head"><span class="chip info">${esc(v.channel)}</span><h3>${esc(v.summary)}</h3><span class="meta">${freshIds.has(v.id) ? "<b>new</b> · " : ""}${esc(v.created_ago)}</span></div>
+    <div class="card-head"><span class="chip info">${esc(v.channel)}</span>${v.revised ? '<span class="chip violet">✎ revised</span>' : ""}<h3>${esc(v.summary)}</h3><span class="meta">${freshIds.has(v.id) ? "<b>new</b> · " : ""}${esc(v.created_ago)}</span></div>
     <div class="meta">From ${esc(v.event.sender_name || "")} &lt;${esc(v.event.sender_address || "")}&gt; · ${esc(v.event.received || "")}${opp ? " · " + opp : ""}</div>
     ${lock}
     <div class="chips">
@@ -433,10 +449,46 @@ function draftCard(v) {
     <div class="chips">${evidenceChips(v)}</div>
     ${scheduleBlock(v)}
     ${(v.review.issues || []).length || (v.review.risks || []).length ? `<div class="meta">Reviewer: ${esc([...v.review.issues, ...v.review.risks].join(" · "))}</div>` : ""}
+    ${taskBlock(v.tasks)}
     ${actions}
     <div class="buttons">${buttons}</div>
     <div class="dontask-slot"></div>
+    <div class="steer">
+      <label>Or tell Steward what to do instead — it rewrites the reply and actions, and shows them here for your approval</label>
+      <textarea data-instr placeholder="e.g. Decline politely, I only want remote roles. · Propose Tuesday morning instead. · Ask for the salary range before scheduling. · Remind me to send my portfolio by Friday."></textarea>
+      <div class="buttons"><button class="btn small" data-do="instruct">Revise with my instruction</button></div>
+    </div>
+    <div class="teach">
+      <label>Teach Steward a rule for future replies (how it should respond next time)</label>
+      <textarea data-rule-text placeholder="e.g. For staffing agencies, always ask who the end client is before sharing availability."></textarea>
+      <div class="buttons">
+        <select data-rule-scope>
+          <option value="kind">Apply to messages like this one</option>
+          ${v.opportunity && v.opportunity.company ? `<option value="company">Apply to ${esc(v.opportunity.company)} only</option>` : ""}
+          ${v.event.sender_address && v.event.sender_address.includes("@") ? `<option value="sender">Apply to ${esc(v.event.sender_address)} only</option>` : ""}
+          <option value="all">Apply to every message</option>
+        </select>
+        <button class="btn small" data-do="rule-save">Save rule</button>
+        <button class="btn small" data-do="rule-redraft">Save &amp; re-draft this</button>
+      </div>
+    </div>
   </article>`;
+}
+function taskRow(t, compact) {
+  const due = t.due_label ? `<span class="${t.overdue ? "overdue" : t.due_soon ? "duesoon" : "meta"}">${t.overdue ? "overdue · " : "due "}${esc(t.due_label)}</span>` : "";
+  const link = t.link ? ` · <a href="${esc(t.link)}" target="_blank" rel="noopener">open link</a>` : "";
+  const btns = t.status === "suggested"
+    ? `<button class="btn small primary" data-task="${t.id}" data-ta="accept">Add to my tasks</button><button class="btn small" data-task="${t.id}" data-ta="dismiss">Dismiss</button>`
+    : t.status === "open" ? `<button class="btn small" data-task="${t.id}" data-ta="done">Mark done</button>`
+    : t.status === "done" ? `<span class="chip ok">done</span>${compact ? "" : `<button class="btn small" data-task="${t.id}" data-ta="reopen">Reopen</button>`}` : "";
+  return `<div class="taskrow"><span class="chip violet">${esc(t.kind_label)}</span>
+    <div class="what"><span class="${t.status === "done" ? "done-text" : ""}">${esc(t.title)}</span>${t.status === "suggested" ? ' <span class="chip warn">suggested</span>' : ""}
+      <div class="meta">${due}${link}${t.company && !compact ? " · " + esc(t.company) : ""}</div></div>
+    <div class="row">${btns}</div></div>`;
+}
+function taskBlock(list) {
+  if (!list || !list.length) return "";
+  return `<div class="tasklist"><div class="meta"><b>Something for you to do</b> — track it as a task:</div>${list.map(t => taskRow(t, true)).join("")}</div>`;
 }
 function handledCard(v) {
   const sent = v.actions.map(a => a.type === "send_email" ? `Email to ${esc((a.payload.to || []).join(", "))}:\n${esc(a.payload.body)}`
@@ -492,9 +544,16 @@ function renderBrief() {
   const cats = [...new Set(all.flatMap(v => v.categories || []))].sort();
   const high = briefFilter(B.high_priority), normal = briefFilter(B.needs_decision), handled = briefFilter(B.handled_automatically);
   const filtered = BF.q || BF.channel || BF.category;
-  const meetings = (B.upcoming || []).map(m => `<div class="meeting"><b>${esc(m.title)}</b>
+  const upcomingItems = [
+    ...(B.upcoming || []).map(m => ({ at: Date.parse(m.start) || 0, html: `<div class="meeting"><b>📅 ${esc(m.title)}</b>
       <span class="meta">${esc(m.when)}${m.my_response === "needsAction" ? " · not answered yet" : ""}</span>
-      ${m.meeting_link ? `<div><a href="${esc(m.meeting_link)}" target="_blank" rel="noopener">Join</a></div>` : ""}</div>`).join("") || `<div class="empty">No job-search meetings in the next 7 days.</div>`;
+      ${m.meeting_link ? `<div><a href="${esc(m.meeting_link)}" target="_blank" rel="noopener">Join</a></div>` : ""}</div>` })),
+    ...(B.deadlines || []).map(t => ({ at: Date.parse(t.due_at) || 0, html: `<div class="meeting"><b>⏰ ${esc(t.title)}</b>
+      <span class="${t.overdue ? "overdue" : t.due_soon ? "duesoon" : "meta"}">${t.overdue ? "Overdue · was due " : "Due "}${esc(t.due_label)}</span>
+      <span class="meta">${t.company ? esc(t.company) + " · " : ""}${esc(t.kind_label)}</span>
+      <div class="row">${t.link ? `<a href="${esc(t.link)}" target="_blank" rel="noopener">Open link</a>` : ""}<button class="btn small" data-task="${t.id}" data-ta="done">Mark done</button></div></div>` })),
+  ].sort((a, b) => a.at - b.at);
+  const meetings = upcomingItems.map(x => x.html).join("") || `<div class="empty">No job-search meetings or deadlines in the next 7 days.</div>`;
   const stages = Object.entries(B.pipeline.by_stage).filter(([, n]) => n).map(([s, n]) => `<span class="chip">${esc(B.stages[s])}: ${n}</span>`).join(" ") || `<span class="muted">Empty</span>`;
   const fyi = (B.fyi || []).map(f => `<div class="meeting"><b>${esc(f.summary)}</b><span class="meta">${esc(f.source)} · ${esc(f.received)}</span></div>`).join("");
   const flight = (B.in_flight || []).map(v => `<div class="meeting"><b>${esc(v.summary)}</b><span class="meta">${esc(v.status)}${v.status_reason ? " · " + esc(v.status_reason) : ""}</span></div>`).join("");
@@ -523,7 +582,7 @@ function renderBrief() {
         ${section("🧠 Suggested automation", B.suggestions, proposalCard)}
       </div>
       <aside class="side">
-        <div class="card"><h3>📅 Upcoming meetings</h3>${meetings}</div>
+        <div class="card"><h3>Upcoming meetings &amp; deadlines</h3>${meetings}</div>
         <div class="card"><h3>📈 Pipeline</h3><div class="chips">${stages}</div></div>
         ${flight ? `<div class="card"><h3>⏳ In flight</h3>${flight}</div>` : ""}
         ${fyi ? `<div class="card"><h3>FYI, no reply needed</h3>${fyi}</div>` : ""}
@@ -536,7 +595,13 @@ function renderBrief() {
   setTimeout(() => freshIds.clear(), 15000);
 }
 const findDraft = (id) => [...B.high_priority, ...B.needs_decision, ...B.handled_automatically].find(v => v.id === id);
-document.addEventListener("input", (ev) => { if (ev.target.closest(".action, .dontask, .override")) dirty = true; });
+document.addEventListener("input", (ev) => { if (ev.target.closest(".action, .dontask, .override, .steer, .teach, .taskform")) dirty = true; });
+document.addEventListener("click", (ev) => {
+  const b = ev.target.closest("[data-task]");
+  if (!b) return;
+  const msg = { accept: "Added to your tasks.", dismiss: "Dismissed.", done: "Marked done.", reopen: "Reopened." }[b.dataset.ta];
+  act(() => api(`/api/tasks/${b.dataset.task}`, "POST", { action: b.dataset.ta }), msg).then(() => { if (tab === "tasks") renderTasks(); });
+});
 document.addEventListener("click", async (ev) => {
   const btn = ev.target.closest("[data-do]");
   if (!btn) return;
@@ -575,6 +640,28 @@ document.addEventListener("click", async (ev) => {
     card.querySelector(".dontask-slot").innerHTML = "";
     return act(() => api(`/api/drafts/${id}/dont-ask`, "POST", body), (r) => `Rule “${r.name}” is active. This draft is approved.`);
   }
+  if (what === "instruct") {
+    const text = card.querySelector("[data-instr]").value.trim();
+    if (!text) return toast("Write what Steward should do instead.");
+    btn.disabled = true; btn.textContent = "Revising… (this takes a few seconds)";
+    const r = await act(() => api(`/api/drafts/${id}/instruct`, "POST", { instruction: text }),
+      (res) => `Revised: ${(res.summary || "new draft ready").replace(/\.$/, "")}${res.warnings && res.warnings.length ? " · " + res.warnings.join(" ").replace(/\.$/, "") : ""}. Review it and approve.`);
+    if (r && r.draft_id) { freshIds.add(r.draft_id); await refresh(true); }
+    else { btn.disabled = false; btn.textContent = "Revise with my instruction"; }
+    return;
+  }
+  if (what === "rule-save" || what === "rule-redraft") {
+    const text = card.querySelector("[data-rule-text]").value.trim();
+    if (!text) return toast("Write the rule first.");
+    const scope = card.querySelector("[data-rule-scope]").value;
+    const redraft = what === "rule-redraft";
+    if (redraft) { btn.disabled = true; btn.textContent = "Re-drafting…"; }
+    const r = await act(() => api(`/api/drafts/${id}/rule`, "POST", { text, scope, redraft }),
+      (res) => `Rule saved for ${res.applies_to}.${res.revised ? " This item was re-drafted with it." : " It will shape future replies."}`);
+    if (r && r.revised) { freshIds.add(r.revised.draft_id); await refresh(true); }
+    else if (redraft) { btn.disabled = false; btn.textContent = "Save & re-draft this"; }
+    return;
+  }
   if (what === "wrong") { card.querySelector(".override").classList.toggle("hidden"); return; }
   if (what === "override") {
     const f = card.querySelector(".override");
@@ -584,6 +671,79 @@ document.addEventListener("click", async (ev) => {
     return act(() => api(`/api/drafts/${id}/override`, "POST", { note, corrected: f.querySelector('[name="corrected"]').value }),
       (r) => r.demoted_to ? `Recorded. The rule now ${r.demoted_to === "shadow" ? "only watches" : "acts and tells you"}.` : "Recorded.");
   }
+});
+
+// ---------- tasks ----------
+// Due times are entered and shown in your profile's time zone (Setup), not the browser's.
+function toLocalInput(iso) {
+  if (!iso) return "";
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone: B.timezone, year: "numeric", month: "2-digit",
+    day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date(iso)).map(p => [p.type, p.value]));
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
+}
+function fromLocalInput(v) { return v || ""; }  // the server reads it in your profile's time zone
+async function renderTasks() {
+  const T = await api("/api/tasks");
+  const host = $("#tab-tasks");
+  const kindOpts = (cur) => Object.entries(T.kinds).map(([k, l]) => `<option value="${k}" ${k === cur ? "selected" : ""}>${esc(l)}</option>`).join("");
+  const oppOpts = (cur) => `<option value="">(no opportunity)</option>` + T.opportunities.map(o => `<option value="${o.id}" ${o.id === cur ? "selected" : ""}>${esc(o.label)}</option>`).join("");
+  const suggested = T.tasks.filter(t => t.status === "suggested");
+  host.innerHTML = `
+    ${suggested.length ? `<h2 class="sec">Suggested by Steward <span class="count">${suggested.length}</span></h2>
+      <div class="card"><div class="meta">Recruiters asked you to do these. Add them to your list to track them (deadlines show under Upcoming).</div>
+      ${suggested.map(t => taskRow(t, false)).join("")}</div>` : ""}
+    <h2 class="sec">Add a task</h2>
+    <div class="card form taskform"><div class="grid2">
+      <div class="field"><label>What do you need to do?</label><input type="text" id="tTitle" placeholder="e.g. Finish the Codility assessment"></div>
+      <div class="field"><label>Due (optional, ${esc(B.timezone)} time)</label><input type="datetime-local" id="tDue"></div>
+      <div class="field"><label>Kind</label><select id="tKind">${kindOpts("other")}</select></div>
+      <div class="field"><label>Opportunity</label><select id="tOpp">${oppOpts(null)}</select></div>
+      <div class="field"><label>Link (optional)</label><input type="text" id="tLink" placeholder="https://..."></div>
+      <div class="field"><label>Notes (optional)</label><input type="text" id="tDetails"></div>
+    </div><div class="buttons"><button class="btn primary small" id="tAdd">Add task</button></div></div>
+    <h2 class="sec">Your tasks</h2>
+    <div id="taskTable"></div>`;
+  $("#tAdd").addEventListener("click", () => {
+    const title = $("#tTitle").value.trim();
+    if (!title) return toast("Write what you need to do.");
+    act(() => api("/api/tasks", "POST", { title, due_at: fromLocalInput($("#tDue").value), kind: $("#tKind").value,
+      opportunity_id: $("#tOpp").value || null, link: $("#tLink").value.trim(), details: $("#tDetails").value.trim() }), "Task added.").then(renderTasks);
+  });
+  dataTable($("#taskTable"), {
+    id: "tasks", noun: "tasks", rows: T.tasks.filter(t => t.status !== "suggested").map(t => ({ ...t, state: t.status === "done" ? "done" : t.overdue ? "overdue" : t.due_soon ? "due soon" : "open" })),
+    defaultSort: { key: "due", dir: "asc" },
+    columns: [
+      { key: "done", label: "Done", sort: false, render: t => `<input type="checkbox" data-check="${t.id}" ${t.status === "done" ? "checked" : ""} title="Mark as completed">` },
+      { key: "title", label: "Task", filter: "text", render: t => `<span class="${t.status === "done" ? "done-text" : ""}"><b>${esc(t.title)}</b></span>${t.details ? `<div class="meta">${esc(t.details).slice(0, 160)}</div>` : ""}` },
+      { key: "kind_label", label: "Kind", filter: "select" },
+      { key: "company", label: "Opportunity", filter: "select" },
+      { key: "due", label: "Due", value: t => t.due_label, sortValue: t => (t.due_at ? Date.parse(t.due_at) : 8.64e15),
+        render: t => t.due_label ? `<span class="${t.overdue ? "overdue" : t.due_soon ? "duesoon" : ""}">${esc(t.due_label)}</span>` : '<span class="muted">—</span>' },
+      { key: "state", label: "Status", filter: "select" },
+      { key: "origin", label: "From", filter: "select", value: t => t.origin === "steward" ? "Steward" : "you" },
+      { key: "link", label: "Link", sort: false, render: t => t.link ? `<a href="${esc(t.link)}" target="_blank" rel="noopener">open</a>` : "" },
+    ],
+    empty: "No tasks yet. Steward suggests them when a recruiter asks you to do something; you can also add your own above.",
+    onRow: t => `<div class="form taskform" data-edit="${t.id}"><div class="grid2">
+        <div class="field"><label>Task</label><input type="text" data-tf="title" value="${esc(t.title)}"></div>
+        <div class="field"><label>Due (${esc(B.timezone)} time)</label><input type="datetime-local" data-tf="due_at" value="${toLocalInput(t.due_at)}"></div>
+        <div class="field"><label>Kind</label><select data-tf="kind">${kindOpts(t.kind)}</select></div>
+        <div class="field"><label>Opportunity</label><select data-tf="opportunity_id">${oppOpts(t.opportunity_id)}</select></div>
+        <div class="field"><label>Link</label><input type="text" data-tf="link" value="${esc(t.link || "")}"></div>
+        <div class="field"><label>Notes</label><input type="text" data-tf="details" value="${esc(t.details || "")}"></div>
+      </div><div class="buttons"><button class="btn small primary" data-save-task="${t.id}">Save changes</button>
+      <button class="btn small danger" data-task="${t.id}" data-ta="dismiss">Delete from list</button></div></div>`,
+    afterDraw: (h) => h.querySelectorAll("[data-check]").forEach(cb => cb.addEventListener("change", () =>
+      act(() => api(`/api/tasks/${cb.dataset.check}`, "POST", { action: cb.checked ? "done" : "reopen" }), cb.checked ? "Marked done." : "Reopened.").then(renderTasks))),
+  });
+}
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-save-task]");
+  if (!b) return;
+  const f = b.closest("[data-edit]"), fields = {};
+  f.querySelectorAll("[data-tf]").forEach(el => { fields[el.dataset.tf] = el.dataset.tf === "due_at" ? fromLocalInput(el.value) : el.value; });
+  fields.opportunity_id = fields.opportunity_id ? +fields.opportunity_id : null;
+  act(() => api(`/api/tasks/${b.dataset.saveTask}`, "POST", { action: "update", fields }), "Task updated.").then(renderTasks);
 });
 
 // ---------- decisions history ----------
@@ -675,7 +835,10 @@ async function renderRules() {
   dataTable($("#prefTable"), {
     id: "prefs", rows: prefs, noun: "preferences",
     columns: [
-      { key: "text", label: "Preference", filter: "text" }, { key: "origin", label: "From", filter: "select" },
+      { key: "text", label: "Preference", filter: "text" },
+      { key: "scope", label: "Applies to", filter: "select", value: p => p.company ? `company: ${p.company}` : p.sender ? `recruiter: ${p.sender}`
+          : ((() => { try { return JSON.parse(p.categories_json || "[]"); } catch (e) { return []; } })().map(label).join(", ") || "every message") },
+      { key: "origin", label: "From", filter: "select" },
       { key: "created_at", label: "Added", render: p => esc(new Date(p.created_at).toLocaleDateString()) },
       { key: "x", label: "", sort: false, render: p => `<button class="btn small danger" data-pref="${p.id}">Retire</button>` },
     ],

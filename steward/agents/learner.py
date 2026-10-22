@@ -73,7 +73,7 @@ class Learner:
         samples = []
         for e in self.ledger.decisions():
             p = e["payload"]
-            if p.get("confidence") is None:
+            if p.get("confidence") is None or p.get("instructed"):
                 continue
             good = p.get("decision") == "approved" or (p.get("decision") == "edited" and p.get("similarity", 0) >= CLEAN)
             samples.append((float(p["confidence"]), good))
@@ -120,8 +120,8 @@ class Learner:
                 continue
             streak = []
             for item in reversed(items):
-                clean = item.get("decision") == "approved" or (
-                    item.get("decision") == "edited" and item.get("similarity", 0) >= CLEAN)
+                clean = not item.get("instructed") and (item.get("decision") == "approved" or (
+                    item.get("decision") == "edited" and item.get("similarity", 0) >= CLEAN))
                 if not clean:
                     break
                 if item.get("route") in ("auto_approve", "auto_send"):
@@ -195,15 +195,18 @@ class Learner:
             p = e["payload"]
             edited = p.get("decision") == "edited" and p.get("similarity", 1) < CLEAN
             rejected_with_note = p.get("decision") == "rejected" and p.get("note")
-            if edited or rejected_with_note:
+            instructed = p.get("instructed") and p.get("decision") in ("approved", "edited")
+            if edited or rejected_with_note or instructed:
                 primary = (p.get("categories") or ["other"])[0]
                 groups[primary].append({"seq": e["seq"], **p})
         created = 0
         for primary, items in groups.items():
             if len(items) < self.auto.preference_min_edits:
                 continue
-            pairs = [{"original": i.get("original_reply", ""), "final": i.get("final_reply", ""),
-                      "note": i.get("note", ""), "categories": i.get("categories", [])} for i in items[-6:]]
+            pairs = [{"original": i.get("pre_instruction_reply") or i.get("original_reply", ""),
+                      "final": i.get("final_reply", ""),
+                      "note": " ".join(x for x in (i.get("instruction", ""), i.get("note", "")) if x),
+                      "categories": i.get("categories", [])} for i in items[-6:]]
             user = "Edited or rejected drafts (oldest first):\n\n" + "\n\n".join(
                 f"--- Example {n + 1} ({', '.join(p['categories'])})\nORIGINAL DRAFT:\n{p['original']}\n\n"
                 f"WHAT THE CANDIDATE SENT INSTEAD:\n{p['final'] or '(rejected)'}\nNOTE: {p['note'] or '-'}"

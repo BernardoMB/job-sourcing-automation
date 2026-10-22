@@ -66,6 +66,7 @@ async def draft(
     opp: dict[str, Any] | None,
     preferences: list[str],
     examples: list[dict[str, Any]],
+    instruction: str = "",
 ) -> dict[str, Any]:
     user = "\n\n".join([
         block("channel", event["source"]),
@@ -74,14 +75,16 @@ async def draft(
         block("thread_history", render_thread(thread)),
         block("message", f"From: {event.get('sender_name')} <{event.get('sender_address')}>\n"
                          f"Subject: {event.get('subject') or ''}\n\n{event.get('body_text') or ''}"),
-        block("classification", {k: cls[k] for k in ("summary", "categories", "questions", "company", "role")}),
+        block("classification", {k: cls.get(k) for k in ("summary", "categories", "questions", "company", "role",
+                                                         "candidate_tasks")}),
         block("cv_evidence", {"answers": evidence.get("items", []), "fit": evidence.get("fit", [])}),
         block("schedule", schedule_block(sched)),
         block("preferences", preferences or ["(none yet)"]),
         block("examples", examples or ["(no similar past decisions yet)"]),
+        *([block("candidate_instruction", instruction)] if instruction else []),
     ])
     context = {"event": event, "classification": cls, "evidence": evidence, "schedule": sched,
-               "opportunity": opp, "preferences": preferences, "examples": examples}
+               "opportunity": opp, "preferences": preferences, "examples": examples, "instruction": instruction}
     out = await call_llm(ctx, "draft", "drafter", event.get("id"), DRAFT_SYSTEM, user, DRAFT_SCHEMA, context)
     out["confidence"] = clamp(out.get("confidence"), default=0.5)
     for key in ("answered_questions", "unanswered_questions", "commitments"):

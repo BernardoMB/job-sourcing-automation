@@ -58,7 +58,8 @@ class LLMConfig(BaseModel):
     # Per-purpose overrides: classify, draft, critique, distill.
     models: dict[str, str] = Field(default_factory=dict)
     effort: dict[str, str] = Field(
-        default_factory=lambda: {"classify": "low", "draft": "medium", "critique": "low", "distill": "low"}
+        default_factory=lambda: {"classify": "low", "draft": "medium", "critique": "low", "distill": "low",
+                                 "instruct": "low"}
     )
     refusal_fallback: bool = True
     grok_model: str = "grok-4"

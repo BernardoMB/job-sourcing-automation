@@ -100,6 +100,25 @@ async def maybe_notify(cfg: Config, db: Database, hub: MCPHub) -> list[str]:
             sent.append(f"reminder:{m['id']}")
     db.kv_set("reminded_meetings", sorted(reminded)[-200:])
 
+    # Deadline reminders: a day before and two hours before (quiet hours respected).
+    reminded_tasks = db.kv_get("reminded_tasks", {}) or {}
+    if not in_quiet_hours(cfg):
+        for t in db.query("SELECT * FROM tasks WHERE status = 'open' AND due_at IS NOT NULL"):
+            due = parse_iso(t["due_at"])
+            if not due:
+                continue
+            hours = (due - utcnow()).total_seconds() / 3600
+            stage = "2h" if 0 <= hours <= 2 else ("24h" if 0 <= hours <= 24 else "")
+            key = str(t["id"])
+            if not stage or stage in reminded_tasks.get(key, []):
+                continue
+            send(cfg, db, "deadline", f"Due {'in ' + str(max(int(hours), 0)) + ' h' if hours < 24 else 'tomorrow'}: "
+                                      f"{t['title']}",
+                 f"{fmt_local(due, cfg.profile.timezone)}" + (f"\n{t['link']}" if t.get("link") else ""), urgent=True)
+            reminded_tasks.setdefault(key, []).append(stage)
+            sent.append(f"deadline:{t['id']}")
+        db.kv_set("reminded_tasks", reminded_tasks)
+
     # Decision digest.
     pending = db.query("SELECT priority FROM drafts WHERE status = 'pending'")
     high = sum(1 for p in pending if p["priority"] == "high")

@@ -132,9 +132,9 @@ def test_dashboard_api(workspace):
         assert client.get("/api/stream").status_code == 403
         evil = TestClient(app, base_url="http://evil.example")
         assert evil.get("/api/briefing").status_code == 403  # DNS-rebinding guard
-        assert client.post("/api/poll", headers=h).json()["processed"] == 9
+        assert client.post("/api/poll", headers=h).json()["processed"] == 10
         b = client.get("/api/briefing").json()
-        assert b["counts"]["undecided"] == 8 and b["loop"]["polls"]["email"] == 1
+        assert b["counts"]["undecided"] == 9 and b["loop"]["polls"]["email"] == 1
         scores = [v["priority_score"] for v in b["high_priority"]]
         assert scores == sorted(scores, reverse=True)
 

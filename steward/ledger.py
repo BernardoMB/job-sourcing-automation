@@ -25,6 +25,8 @@ KINDS = {
     "rule_change",       # a rule was created, promoted, demoted, retired, graduated
     "preference_change", # a preference was created or retired
     "proposal",          # you accepted or dismissed a suggested automation
+    "task",              # a task was suggested, accepted, added, completed, or dismissed
+    "instruction",       # you told Steward what to do instead of its draft
 }
 
 

@@ -56,6 +56,13 @@ def compute(cfg: Config, db: Database, draft: dict[str, Any]) -> tuple[float, li
     if cls.get("urgency") == "high":
         score += 10
         why.append("marked urgent")
+    due = sorted(d for d in (parse_iso(r["due_at"]) for r in db.query(
+        "SELECT due_at FROM tasks WHERE event_id = ? AND status IN ('open', 'suggested') AND due_at IS NOT NULL",
+        (draft["event_id"],))) if d)
+    if due:
+        hours = (due[0] - utcnow()).total_seconds() / 3600
+        score += 20 if hours <= 48 else 8
+        why.append(f"deadline {fmt_local(due[0], cfg.profile.timezone)}")
     soon = _times(draft, analysis, event)
     if soon:
         hours = (soon[0] - utcnow()).total_seconds() / 3600

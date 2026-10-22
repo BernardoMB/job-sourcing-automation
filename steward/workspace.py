@@ -178,6 +178,7 @@ def seed_sandbox(cfg: Config, db: Database, now: datetime | None = None) -> None
     thursday = _next_weekday(now_local, 3)
     tuesday = _next_weekday(now_local, 1)
     proposed = _at(thursday, 14, 0)
+    assessment_due = now_local + timedelta(days=4)
 
     def ago(hours: float) -> str:
         return to_iso(now_local - timedelta(hours=hours))
@@ -246,6 +247,18 @@ def seed_sandbox(cfg: Config, db: Database, now: datetime | None = None) -> None
             "body_text": (
                 "Hi Alex,\n\nThe hiring manager for our Backend Engineer role at Quanta Systems would like to chat "
                 "next week. When are you free for a 30-minute call?\n\nBest regards,\nElena"
+            ),
+        },
+        {
+            "uid": 107, "message_id": "<nd-220@nimbus-data.example>",
+            "from_name": "Hannah Brooks", "from_email": "hannah.brooks@nimbus-data.example",
+            "to": [cfg.profile.email], "cc": [], "date": ago(1), "in_reply_to": "", "references": [],
+            "subject": "Next step: online assessment - Senior Data Engineer",
+            "body_text": (
+                "Hi Alex,\n\nThanks for your interest in the Senior Data Engineer role at Nimbus Data! The next step "
+                "is a 60-minute online assessment on Codility: https://app.codility.com/test/nimbus-demo\n\n"
+                f"Please complete it by {_long_date(assessment_due).split(' at ')[0]}. Let me know if you have any "
+                "questions.\n\nBest,\nHannah"
             ),
         },
     ]

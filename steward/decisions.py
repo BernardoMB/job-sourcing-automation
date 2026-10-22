@@ -137,6 +137,10 @@ def ledger_payload(db: Database, draft: dict[str, Any], decision: str, final: li
         "route_reasons": loads(draft["route_reasons_json"], []),
         "matched_rule_id": draft["matched_rule_id"],
         "shadow_rule_ids": loads(draft["shadow_rule_ids_json"], []),
+        # Drafts rewritten from your own instruction teach style and preferences, not autonomy.
+        "instructed": bool(analysis.get("instruction")),
+        "instruction": analysis.get("instruction", ""),
+        "pre_instruction_reply": analysis.get("pre_instruction_reply", ""),
     }
 
 
@@ -322,12 +326,50 @@ def rule_action(db: Database, ledger: Ledger, rule_id: int, action: str) -> None
     ledger.append("rule_change", {"change": action, "by": "you", **updates}, rule_id=rule_id)
 
 
-def add_preference(db: Database, ledger: Ledger, text: str, categories: list[str] | None = None) -> int:
-    pref_id = db.insert("preferences", {"text": text.strip(), "categories_json": dumps(categories or []),
+def add_preference(db: Database, ledger: Ledger, text: str, categories: list[str] | None = None,
+                   company: str = "", sender: str = "", draft_id: int | None = None) -> int:
+    text = text.strip()
+    if not text:
+        raise DecisionError("Write the rule first")
+    pref_id = db.insert("preferences", {"text": text, "categories_json": dumps(categories or []),
+                                        "company": company.strip() or None, "sender": sender.strip().lower() or None,
                                         "status": "active", "origin": "user", "created_at": now_iso(),
                                         "updated_at": now_iso()})
-    ledger.append("preference_change", {"change": "created", "origin": "user", "text": text.strip()})
+    ledger.append("preference_change", {"change": "created", "origin": "user", "text": text,
+                                        "categories": categories or [], "company": company, "sender": sender},
+                  draft_id=draft_id)
     return pref_id
+
+
+RULE_SCOPES = {
+    "kind": "messages like this one",
+    "company": "this company",
+    "sender": "this recruiter",
+    "all": "every message",
+}
+
+
+def teach_rule(db: Database, ledger: Ledger, draft_id: int, text: str, scope: str = "kind") -> dict[str, Any]:
+    """A standing instruction written on a briefing item: shapes every future draft in its scope."""
+    draft = db.get_draft(draft_id)
+    if draft is None:
+        raise DecisionError("No such draft")
+    if scope not in RULE_SCOPES:
+        raise DecisionError("scope must be kind, company, sender, or all")
+    cls = (loads(draft["analysis_json"], {}) or {}).get("classification", {}) or {}
+    event = db.get_event(draft["event_id"]) or {}
+    opp = db.get_opportunity(draft["opportunity_id"]) or {}
+    categories = [c for c in cls.get("categories", []) if c != "not_recruiter"] if scope == "kind" else []
+    company = (opp.get("company") or cls.get("company") or "") if scope == "company" else ""
+    sender = (event.get("sender_address") or "") if scope == "sender" else ""
+    if scope == "company" and not company:
+        raise DecisionError("Steward doesn't know this item's company; choose another scope")
+    if scope == "sender" and not sender:
+        raise DecisionError("Steward doesn't know who sent this item; choose another scope")
+    pref_id = add_preference(db, ledger, text, categories, company, sender, draft_id=draft_id)
+    where = {"kind": " / ".join(c.replace("_", " ") for c in categories) or "messages like this one",
+             "company": company, "sender": sender, "all": "every message"}[scope]
+    return {"preference_id": pref_id, "applies_to": where}
 
 
 def retire_preference(db: Database, ledger: Ledger, pref_id: int) -> None:
@@ -338,10 +380,16 @@ def retire_preference(db: Database, ledger: Ledger, pref_id: int) -> None:
     ledger.append("preference_change", {"change": "retired", "text": pref["text"]})
 
 
-def active_preferences(db: Database, categories: list[str]) -> list[str]:
+def active_preferences(db: Database, categories: list[str], company: str = "", sender: str = "") -> list[str]:
+    """Standing instructions that apply to a message: by kind, company, recruiter, or everything."""
     out = []
     for p in db.query("SELECT * FROM preferences WHERE status = 'active' ORDER BY id"):
         cats = loads(p["categories_json"], [])
-        if not cats or set(cats) & set(categories):
-            out.append(p["text"])
+        if cats and not set(cats) & set(categories):
+            continue
+        if p.get("company") and p["company"].lower() != (company or "").lower():
+            continue
+        if p.get("sender") and p["sender"] != (sender or "").lower():
+            continue
+        out.append(p["text"])
     return out

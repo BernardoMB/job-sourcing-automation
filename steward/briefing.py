@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from steward import tasks as tasks_mod
 from steward.agents.router import calibration
 from steward.config import Config
 from steward.db import Database, loads
@@ -82,6 +83,9 @@ def draft_view(cfg: Config, db: Database, d: dict[str, Any]) -> dict[str, Any]:
         "shadow_rules": loads(d["shadow_rule_ids_json"], []),
         "opportunity": {"id": opp["id"], "company": opp["company"], "role": opp["role"],
                         "stage": stage_label(opp["stage"])} if opp else None,
+        "tasks": tasks_mod.for_event(cfg, db, d["event_id"]),
+        "revised": bool(d.get("revised_from")),
+        "instruction": analysis.get("instruction", ""),
         "dont_ask": {
             "allowed": not blocked,
             "blocked_reason": ("Steward always asks you about " + ", ".join(b.replace("_", " ") for b in blocked))
@@ -125,6 +129,7 @@ def build(cfg: Config, db: Database, meetings: list[dict[str, Any]] | None = Non
         o["last_contact"] = ago(max(o.get("last_inbound_at") or "", o.get("last_outbound_at") or "") or None)
     rules = [rule_view(r) for r in db.query("SELECT * FROM rules WHERE status != 'retired' ORDER BY id")]
     last_cycle = db.kv_get("last_cycle", {}) or {}
+    deadlines = tasks_mod.deadlines(cfg, db)
     staged = sum(1 for v in views if v["status"] in ("approved", "edited", "rejected"))
     return {
         "generated_for": cfg.profile.name,
@@ -140,6 +145,9 @@ def build(cfg: Config, db: Database, meetings: list[dict[str, Any]] | None = Non
             "handled_automatically": len(handled),
             "handled_silently": len(silent),
             "in_flight": len(in_flight),
+            "tasks_open": db.scalar("SELECT COUNT(*) FROM tasks WHERE status = 'open'") or 0,
+            "tasks_suggested": db.scalar("SELECT COUNT(*) FROM tasks WHERE status = 'suggested'") or 0,
+            "tasks_due_soon": sum(1 for t in deadlines if t["due_soon"] or t["overdue"]),
             "suggestions": sum(1 for p in proposals if p["status"] == "open"),
             "ignored": ignored,
         },
@@ -151,6 +159,7 @@ def build(cfg: Config, db: Database, meetings: list[dict[str, Any]] | None = Non
         "suggestions": proposals,
         "fyi": fyi,
         "upcoming": meetings or [],
+        "deadlines": deadlines,
         "pipeline": {"by_stage": by_stage, "opportunities": opps},
         "rules": rules,
         "calibration": calibration(db, cfg),

@@ -17,7 +17,8 @@ from datetime import timedelta
 from typing import Any
 
 from steward import decisions, notify, pipeline, priority
-from steward.agents import classifier, cv_analyst, drafter, fewshot, scheduler
+from steward import tasks as tasks_mod
+from steward.agents import classifier, cv_analyst, drafter, fewshot, instructor, scheduler
 from steward.agents.base import AgentContext
 from steward.agents.learner import Learner
 from steward.agents.router import RouteDecision, route
@@ -134,6 +135,139 @@ class Steward:
                 await self.process_pending(hub, errors)
             self.rescore()
         return result
+
+    # -- your instructions and rules ---------------------------------------------
+    async def revise(self, draft_id: int, instruction: str = "", reason: str = "") -> dict[str, Any]:
+        """Rebuild a waiting draft: from your instruction ("decline politely...") or with a rule you just added.
+
+        The new version replaces the old one in the briefing and waits for your approval.
+        """
+        old = self.db.get_draft(draft_id)
+        if old is None or old["status"] not in ("pending", "approved", "edited", "rejected"):
+            raise decisions.DecisionError("Only items still waiting for you can be revised")
+        instruction = (instruction or "").strip()
+        event = hydrate(self.db.get_event(old["event_id"]) or {})
+        analysis = loads(old["analysis_json"], {}) or {}
+        old_actions = loads(old["actions_json"], []) or []
+        opp = self.db.get_opportunity(old["opportunity_id"])
+        warnings: list[str] = []
+        async with MCPHub(self.cfg) as hub:
+            ctx = self.ctx(hub)
+            cls = analysis.get("classification") or {}
+            if "questions" not in cls:  # an item Steward could not triage before
+                cls = await classifier.classify(ctx, event, self.thread_history(event))
+            evidence = analysis.get("evidence") or await cv_analyst.analyze(ctx, cls)
+            sched = analysis.get("schedule") or {"kind": "none", "checks": [], "slots": [], "booking": None,
+                                                  "rsvp": None, "notes": []}
+            plan: dict[str, Any] | None = None
+            reply_needed = bool(decisions.message_text(old_actions)) or bool(cls.get("needs_reply"))
+            if instruction:
+                plan = await instructor.plan(ctx, event, cls, old_actions, instruction)
+                sched = await self._schedule_from_plan(ctx, event, cls, plan, sched, warnings)
+                reply_needed = plan["reply_needed"]
+                for t in plan["tasks"]:
+                    tasks_mod.add(self.cfg, self.db, self.ledger, t["title"], details=t["details"], kind=t["kind"],
+                                  link=t["link"], due_at=t["due"] or None, opportunity_id=opp["id"] if opp else None,
+                                  origin="you", event_id=event.get("id"))
+                if plan["stage"] != "none" and opp:
+                    pipeline.set_stage(self.db, opp["id"], plan["stage"], force=True)
+            if "call_notification" in cls.get("categories", []) and not event["raw"].get("reply_via"):
+                via = self._reply_target(opp)
+                if via:
+                    event["raw"]["reply_via"] = via
+            prefs = decisions.active_preferences(self.db, cls.get("categories", []),
+                                                 (opp or {}).get("company") or cls.get("company", ""),
+                                                 event.get("sender_address", ""))
+            if reply_needed:
+                guidance = instruction + (f"\nPlan: {plan['reply_guidance']}" if plan and plan["reply_guidance"] else "")
+                drafted = await drafter.draft(ctx, event, self.thread_history(event), cls, evidence, sched, opp, prefs,
+                                              fewshot.retrieve(self.ledger, event, cls), instruction=guidance)
+            else:
+                drafted = {"reply_subject": "", "reply_body": "", "answered_questions": [],
+                           "unanswered_questions": [], "commitments": [], "next_step": "", "confidence": 0.95,
+                           "rationale": "You asked for no reply."}
+            actions = self.build_actions(event, cls, drafted, sched, opp)
+        if instruction:
+            reasons = [f"Rewritten from your instruction: “{instruction}”"]
+            if plan and plan["summary"]:
+                reasons.append(plan["summary"])
+        else:
+            reasons = [reason or "Re-drafted with your new rule."]
+        if not actions:
+            warnings.append("Nothing to send: approve to close this item, or write another instruction.")
+        new_analysis = {**analysis, "classification": cls, "evidence": evidence, "schedule": sched, "draft": drafted,
+                        "preferences_used": prefs, "revised_from": draft_id,
+                        "instruction": instruction or analysis.get("instruction", ""),
+                        "pre_instruction_reply": analysis.get("pre_instruction_reply")
+                        or decisions.message_text(old_actions),
+                        "plan": plan}
+        new_id = self.db.insert("drafts", {
+            "event_id": old["event_id"], "opportunity_id": old["opportunity_id"], "channel": old["channel"],
+            "summary": old["summary"], "actions_json": dumps(actions), "analysis_json": dumps(new_analysis),
+            "confidence": drafted.get("confidence", old["confidence"]), "job_advancement": old["job_advancement"],
+            "routing_band": old["routing_band"], "risk_level": old["risk_level"], "priority": old["priority"],
+            "route": "ask", "route_reasons_json": dumps(warnings + reasons), "matched_rule_id": None,
+            "shadow_rule_ids_json": "[]", "status": "pending", "created_at": now_iso(), "revised_from": draft_id,
+        })
+        self.db.update("drafts", draft_id, {"status": "superseded",
+                                            "status_reason": f"Replaced by a revised version (#{new_id})."})
+        self.db.execute("UPDATE tasks SET draft_id = ? WHERE draft_id = ?", (new_id, draft_id))
+        if instruction:
+            self.ledger.append("instruction", {"instruction": instruction, "plan": plan, "replaced_draft": draft_id,
+                                               "new_draft": new_id, "warnings": warnings},
+                               event_id=old["event_id"], draft_id=new_id)
+        self.rescore()
+        return {"draft_id": new_id, "summary": (plan or {}).get("summary") or reasons[0], "warnings": warnings}
+
+    async def _schedule_from_plan(self, ctx: AgentContext, event: dict[str, Any], cls: dict[str, Any],
+                                  plan: dict[str, Any], sched: dict[str, Any], warnings: list[str]) -> dict[str, Any]:
+        action = plan["meeting_action"]
+        if action == "keep":
+            return sched
+        empty = {"kind": "none", "checks": [], "slots": [], "booking": None, "rsvp": None, "notes": []}
+        sch = self.cfg.scheduling
+        duration = timedelta(minutes=sch.default_duration_minutes)
+
+        def window(t: dict[str, str]) -> tuple[str, str]:
+            start = parse_iso(t["start"])
+            end = parse_iso(t["end"]) if t.get("end") else None
+            return to_iso(start), to_iso(end if end and start and end > start else start + duration)
+
+        if action == "none":
+            return empty
+        raw = event.get("raw", {})
+        if action in ("accept_invite", "decline_invite"):
+            if event.get("source") != "calendar" or not raw.get("id"):
+                warnings.append("There is no calendar invitation on this item to answer.")
+                return empty
+            response = "accepted" if action == "accept_invite" else "declined"
+            return {**empty, "kind": "invite_accept" if response == "accepted" else "none",
+                    "rsvp": {"event_id": raw["id"], "response": response}}
+        if action == "find_times" or (action in ("book", "propose_times") and not plan["times"]):
+            now = utcnow()
+            return {**empty, "kind": "propose_slots",
+                    "slots": await scheduler.slots_between(ctx, now, now + timedelta(days=sch.lookahead_days),
+                                                           sch.default_duration_minutes)}
+        times = [window(t) for t in plan["times"]]
+        if action == "propose_times":
+            return {**empty, "kind": "propose_slots",
+                    "slots": [{"start": s, "end": e, "label": scheduler.label(ctx, s, e)} for s, e in times]}
+        start, end = times[0]
+        label = scheduler.label(ctx, start, end)
+        check = await ctx.hub.call("calendar", "check_availability",
+                                   {"start": start, "end": end, "buffer_minutes": sch.buffer_minutes})
+        if not check.get("free"):
+            titles = ", ".join(c.get("title", "busy") for c in check.get("conflicts", []))
+            warnings.append(f"{label} conflicts with {titles or 'another event'}, so it is offered as a proposal "
+                            "instead of being booked.")
+            return {**empty, "kind": "propose_slots", "slots": [{"start": start, "end": end, "label": label}]}
+        booking = None
+        if event.get("sender_address") and "@" in event.get("sender_address", ""):
+            booking = {"title": scheduler.meeting_title(ctx, cls, event), "start": start, "end": end,
+                       "attendees": [event["sender_address"]], "description": "Scheduled by The Steward.",
+                       "add_video_link": sch.add_video_link, "location": ""}
+        return {**empty, "kind": "accept_proposed", "accepted_label": label, "booking": booking,
+                "checks": [{"start": start, "end": end, "label": label, "free": True, "ok": True, "problems": []}]}
 
     # -- re-prioritization ----------------------------------------------------------
     async def reprioritize(self, hub: MCPHub) -> dict[str, int]:
@@ -505,6 +639,8 @@ class Steward:
             else:
                 self._call_back_item(event, cls, opp)
                 return "queued"
+        tasks_mod.suggest_from_classification(self.cfg, self.db, self.ledger, cls, event["id"],
+                                              opp["id"] if opp else None)
         if opp and ctx.hub.enabled("notion"):
             try:
                 opp = await pipeline.notion_pull(ctx.hub, self.db, opp)
@@ -530,7 +666,8 @@ class Steward:
             self.db.update("events", event["id"], {"status": "info", "processed_at": now_iso()})
             return "info"
 
-        prefs = decisions.active_preferences(self.db, cls["categories"])
+        prefs = decisions.active_preferences(self.db, cls["categories"], (opp or {}).get("company") or cls.get("company", ""),
+                                             event.get("sender_address", ""))
         examples = fewshot.retrieve(self.ledger, event, cls)
         if needs_text:
             drafted = await drafter.draft(ctx, event, thread, cls, evidence, sched, opp, prefs, examples)
@@ -546,6 +683,7 @@ class Steward:
                          review=review, opp=opp)
         draft_id = self._save_draft(event, cls, evidence, sched, drafted, review, actions, decision, opp, examples,
                                     prefs)
+        tasks_mod.link_draft(self.db, event["id"], draft_id)
         for rule_id in decision.matched_rule_ids + decision.shadow_rule_ids:
             self.db.execute("UPDATE rules SET times_matched = times_matched + 1, last_matched_at = ? WHERE id = ?",
                             (now_iso(), rule_id))

@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from steward.config import Config
-from steward.timeutil import parse_iso, to_iso, tz
+from steward.timeutil import fmt_local, parse_iso, to_iso, tz
 from steward.vocab import find_technologies
 
 RECRUITING_WORDS = re.compile(
@@ -32,6 +32,29 @@ TIME_RE = re.compile(
 
 CALL_RE = re.compile(r"\b(voicemail|missed call|missed a call)\b", re.I)
 PHONE_RE = re.compile(r"\+?\d[\d\s().-]{8,}\d")
+
+URL_RE = re.compile(r"https?://\S+")
+DUE_RE = re.compile(
+    r"\b(?:by|before|until|no later than|deadline:?)\s+(?:(?:monday|tuesday|wednesday|thursday|friday|saturday|"
+    r"sunday),?\s+)?(january|february|march|april|may|june|july|august|september|october|november|december)\s+"
+    r"(\d{1,2})", re.IGNORECASE)
+TASK_RULES: list[tuple[str, re.Pattern[str]]] = [
+    ("assessment", re.compile(r"\b(assessment|coding challenge|take-home|hackerrank|codility|codesignal|online test)",
+                              re.I)),
+    ("form", re.compile(r"\b(form|questionnaire|survey)\b", re.I)),
+    ("application", re.compile(r"\b(apply (here|at|via|through|using)|application link|submit (your|an) application)",
+                               re.I)),
+    ("document", re.compile(r"\b(portfolio|cover letter|writing sample|references list)\b", re.I)),
+    ("prepare", re.compile(r"\b(prepare a|presentation for)\b", re.I)),
+]
+DECLINE_RE = re.compile(r"\b(decline|not interested|pass on|turn (it|this) down|withdraw)", re.I)
+TASK_TITLES = {
+    "assessment": "Complete the online assessment",
+    "form": "Fill in the form",
+    "application": "Apply through the link",
+    "document": "Prepare and send the requested document",
+    "prepare": "Prepare what they asked for",
+}
 
 CATEGORY_RULES: list[tuple[str, re.Pattern[str]]] = [
     ("offer", re.compile(r"\b(extend (you )?an offer|offer letter|pleased to offer|formal offer|verbal offer)", re.I)),
@@ -186,7 +209,41 @@ class OfflineLLM:
             "stage_signal": stage,
             "urgency": "high" if primary in ("offer", "interview_request") else "normal",
             "suspicious": False,
+            "candidate_tasks": self._tasks(ev.get("body_text", ""), company, ctx) if recruiter else [],
         }
+
+    def _tasks(self, body: str, company: str, ctx: dict[str, Any]) -> list[dict[str, str]]:
+        out, seen = [], set()
+        link = URL_RE.search(body)
+        due = self._parse_due(body, ctx)
+        for kind, pat in TASK_RULES:
+            m = pat.search(body)
+            if not m or kind in seen:
+                continue
+            seen.add(kind)
+            sentence = next((s for s in _sentences(body) if pat.search(s)), m.group(0))
+            out.append({"title": TASK_TITLES[kind] + (f" ({company})" if company else ""), "kind": kind,
+                        "due": due, "link": link.group(0).rstrip(").,") if link else "", "details": sentence[:300]})
+        return out
+
+    def _parse_due(self, text: str, ctx: dict[str, Any]) -> str:
+        now = parse_iso(ctx.get("now")) or datetime.now(tz(self.cfg.profile.timezone))
+        zone = tz(ctx.get("timezone") or self.cfg.profile.timezone)
+        m = re.search(r"within (\d+) (hours?|days?)", text, re.I)
+        if m:
+            n = int(m.group(1))
+            return to_iso(now + (timedelta(hours=n) if m.group(2).lower().startswith("hour") else timedelta(days=n)))
+        m = DUE_RE.search(text)
+        if m:
+            month = MONTHS.index(m.group(1).lower()) + 1
+            try:
+                due = datetime(now.astimezone(zone).year, month, int(m.group(2)), 23, 59, tzinfo=zone)
+            except ValueError:
+                return ""
+            if due < now - timedelta(days=1):
+                due = due.replace(year=due.year + 1)
+            return to_iso(due)
+        return ""
 
     def _parse_times(self, text: str, ctx: dict[str, Any]) -> list[dict[str, str]]:
         now = parse_iso(ctx.get("now")) or datetime.now(tz(self.cfg.profile.timezone))
@@ -220,6 +277,16 @@ class OfflineLLM:
         cats = set(cls.get("categories", []))
         lines = [f"Hi {name},", ""]
         answered, unanswered, commitments = [], [], []
+        note = (ctx.get("instruction") or "").split("\nPlan:")[0].strip()
+        if note and DECLINE_RE.search(note):
+            lines += [f"Thank you for thinking of me for the {role} role at {company}. After some consideration, "
+                      "I'll pass on this one for now, but I'd be glad to stay in touch about future roles.",
+                      "", "Best,", profile.signature or profile.name]
+            return {"reply_subject": f"Re: {ev.get('subject') or ''}".strip(), "reply_body": "\n".join(lines),
+                    "answered_questions": [], "unanswered_questions": [], "commitments": [],
+                    "next_step": "stay in touch", "confidence": 0.9, "rationale": "Declined as you instructed."}
+        if note:
+            lines.append(note[0].upper() + note[1:].rstrip(".") + ".")
         if "call_notification" in cats:
             lines.append(f"Sorry I missed your call! Thanks for reaching out about the {role} opportunity at "
                          f"{company} - I'd love to talk.")
@@ -260,6 +327,11 @@ class OfflineLLM:
             lines.append("On compensation, I'd like to learn more about the scope of the role first. Could you share "
                          "the budgeted range for the position?")
             answered.append("salary")
+        for t in cls.get("candidate_tasks", []) or []:
+            due = f" by {fmt_local(t['due'], self.cfg.profile.timezone).rsplit(',', 1)[0]}" if t.get("due") else ""
+            lines.append(f"Thanks for sending this over - I'll take care of it{due}.")
+            commitments.append(t["title"])
+            break
         kind = sched.get("kind", "none")
         slots = sched.get("slots", [])
         if kind == "accept_proposed":
@@ -273,7 +345,7 @@ class OfflineLLM:
             lines.extend(f"- {s['label']}" for s in slots)
         elif kind == "invite_accept":
             lines.append("I've accepted the invite - looking forward to it.")
-        if kind == "none" and "rejection" not in cats and "offer" not in cats:
+        if kind == "none" and "rejection" not in cats and "offer" not in cats and not cls.get("candidate_tasks"):
             lines.append("I'd love to set up a quick call to learn more. What times work for you this week?")
         lines += ["", "Best,", profile.signature or profile.name]
         body = "\n".join(lines)
@@ -298,6 +370,36 @@ class OfflineLLM:
             "confidence": confidence,
             "rationale": "Offline template draft grounded in CV evidence and calendar availability.",
         }
+
+    # -- instruct ---------------------------------------------------------
+    def _instruct(self, ctx: dict[str, Any]) -> dict[str, Any]:
+        note = ctx.get("instruction", "")
+        low = note.lower()
+        source = (ctx.get("event") or {}).get("source", "")
+        times = self._parse_times(note, ctx)
+        if source == "calendar" and re.search(r"\bdecline\b", low):
+            meeting = "decline_invite"
+        elif source == "calendar" and re.search(r"\baccept\b", low):
+            meeting = "accept_invite"
+        elif times:
+            meeting = "book" if re.search(r"\b(book|schedule|confirm|set up)\b", low) else "propose_times"
+        elif re.search(r"\b(propose|suggest|offer)\b.*\btimes?\b", low):
+            meeting = "find_times"
+        elif DECLINE_RE.search(note):
+            meeting = "none"
+        else:
+            meeting = "keep"
+        tasks = []
+        m = re.search(r"(?:task|remind me) to (.+?)(?:\.|$)", note, re.I)
+        if m:
+            tasks.append({"title": m.group(1).strip().capitalize(), "kind": "other",
+                          "due": self._parse_due(note, ctx), "link": "", "details": note})
+        stage = "withdrawn" if re.search(r"\bwithdraw", low) else "none"
+        no_reply = bool(re.search(r"\b(don't reply|do not reply|no reply|ignore it|archive it)\b", low))
+        return {"reply_needed": not no_reply, "reply_guidance": note, "meeting_action": meeting, "times": times,
+                "tasks": tasks, "stage": stage,
+                "summary": "I'll rewrite the reply following your note" + (" and update the meeting" if meeting not in (
+                    "keep", "none") else "") + "."}
 
     # -- critique -------------------------------------------------------
     def _critique(self, ctx: dict[str, Any]) -> dict[str, Any]:

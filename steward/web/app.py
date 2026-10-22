@@ -28,6 +28,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from steward import briefing as briefing_mod
 from steward import decisions
 from steward import setup as setup_mod
+from steward import tasks as tasks_mod
+from steward.llm import LLMError
 from steward.config import Config
 from steward.db import loads
 from steward.llm.schemas import CRITIQUE_SCHEMA
@@ -242,6 +244,67 @@ def create_app(cfg: Config, watch: bool = True, tick: int | None = None) -> Fast
             raise bad(exc)
         bump("decision", id=draft_id)
         return res
+
+    @app.post("/api/drafts/{draft_id}/instruct")
+    async def instruct(draft_id: int, body: dict[str, Any]) -> dict[str, Any]:
+        text = (body.get("instruction") or "").strip()
+        if not text:
+            raise HTTPException(400, "Write what Steward should do instead")
+        try:
+            async with lock:
+                res = await steward.revise(draft_id, instruction=text)
+        except (decisions.DecisionError, tasks_mod.TaskError) as exc:
+            raise bad(exc)
+        except LLMError as exc:
+            raise HTTPException(503, f"Claude could not process the instruction right now: {exc}")
+        bump("revised", id=res["draft_id"])
+        return res
+
+    @app.post("/api/drafts/{draft_id}/rule")
+    async def item_rule(draft_id: int, body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            res = decisions.teach_rule(db, ledger, draft_id, body.get("text", ""), body.get("scope", "kind"))
+            if body.get("redraft"):
+                async with lock:
+                    res["revised"] = await steward.revise(
+                        draft_id, reason=f"Re-drafted with your new rule: “{body.get('text', '').strip()}”")
+        except decisions.DecisionError as exc:
+            raise bad(exc)
+        except LLMError as exc:
+            raise HTTPException(503, f"Rule saved, but Claude could not re-draft right now: {exc}")
+        bump("rule", id=draft_id)
+        return res
+
+    # -- tasks ---------------------------------------------------------------------
+    @app.get("/api/tasks")
+    async def list_tasks(dismissed: bool = False) -> dict[str, Any]:
+        return {"tasks": tasks_mod.listing(C(), db, include_dismissed=dismissed), "kinds": tasks_mod.KINDS,
+                "opportunities": [{"id": o["id"], "label": " - ".join(x for x in (o["company"], o["role"]) if x)
+                                   or f"Opportunity {o['id']}"}
+                                  for o in db.query("SELECT id, company, role FROM opportunities ORDER BY company")]}
+
+    @app.post("/api/tasks")
+    async def create_task(body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            task_id = tasks_mod.add(C(), db, ledger, body.get("title", ""), details=body.get("details", ""),
+                                    kind=body.get("kind", "other"), link=body.get("link", ""),
+                                    due_at=body.get("due_at") or None,
+                                    opportunity_id=int(body["opportunity_id"]) if body.get("opportunity_id") else None)
+        except tasks_mod.TaskError as exc:
+            raise bad(exc)
+        steward.rescore()
+        bump("task", id=task_id)
+        return {"id": task_id}
+
+    @app.post("/api/tasks/{task_id}")
+    async def change_task(task_id: int, body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            task = tasks_mod.act(C(), db, ledger, task_id, body.get("action", ""), body.get("fields"))
+        except tasks_mod.TaskError as exc:
+            raise bad(exc)
+        steward.rescore()
+        bump("task", id=task_id)
+        return task
 
     @app.post("/api/proposals/{proposal_id}")
     async def proposal(proposal_id: int, body: dict[str, Any]) -> dict[str, Any]:

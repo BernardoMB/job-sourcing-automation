@@ -105,4 +105,4 @@ def test_queue_waits_for_the_reset_without_losing_messages(steward):
     steward.db.kv_set("llm_paused", {"until": (utcnow() - timedelta(minutes=1)).isoformat(), "reason": "x"})
     steward._llm = None
     steward.cfg.llm.provider = "offline"
-    assert run(steward.cycle(force=True))["processed"] == 9
+    assert run(steward.cycle(force=True))["processed"] == 10

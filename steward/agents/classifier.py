@@ -8,7 +8,7 @@ from typing import Any
 from steward.agents.base import AgentContext, block, call_llm
 from steward.agents.prompts import CLASSIFY_SYSTEM
 from steward.llm.schemas import CLASSIFY_SCHEMA
-from steward.taxonomy import CATEGORIES, QUESTION_TYPES, STAGE_SIGNALS, risk_of
+from steward.taxonomy import CATEGORIES, QUESTION_TYPES, STAGE_SIGNALS, TASK_KINDS, risk_of
 from steward.timeutil import parse_iso, to_iso, tz, utcnow
 
 
@@ -63,7 +63,18 @@ def normalize(raw: dict[str, Any], cfg_tz: str) -> dict[str, Any]:
         "stage_signal": raw.get("stage_signal") if raw.get("stage_signal") in STAGE_SIGNALS else "none",
         "urgency": raw.get("urgency") if raw.get("urgency") in ("low", "normal", "high") else "normal",
         "suspicious": bool(raw.get("suspicious", False)),
+        "candidate_tasks": [],
     }
+    for t in raw.get("candidate_tasks", []) or []:
+        title = str(t.get("title", "")).strip()
+        if not title:
+            continue
+        due = parse_iso(t.get("due"), cfg_tz)
+        out["candidate_tasks"].append({
+            "title": title[:200], "kind": t.get("kind") if t.get("kind") in TASK_KINDS else "other",
+            "due": to_iso(due) if due else "", "link": str(t.get("link", "")).strip(),
+            "details": str(t.get("details", "")).strip()[:1500],
+        })
     out["risk_level"] = risk_of(cats)
     return out
 

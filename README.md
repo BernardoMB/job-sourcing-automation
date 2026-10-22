@@ -29,6 +29,14 @@ open source and runs on your machine.
    window updates by itself, with a toast, a count in the title, and optional desktop/phone notifications.
 3. You read the briefing, Approve / edit / Reject / "Don't ask again", and press **Go**. To send each approval
    immediately instead, switch on **Act on each approval immediately**.
+4. Not happy with a proposal? Type what to do instead in the item's **"Or tell Steward what to do instead"** field
+   ("Decline politely, I only want remote roles", "Book Tuesday 10am", "Remind me to send my portfolio by Friday").
+   Steward rewrites the reply and the meeting/task/stage actions and shows the result for your approval. To shape
+   future replies, write a rule in **"Teach Steward a rule"** (for messages like this, this company, this recruiter,
+   or everything), then *Save rule* or *Save & re-draft this*.
+5. When a recruiter asks you to do something yourself (an online assessment, a form, a document, applying through
+   another link), Steward suggests a **task**. Accept it and it appears in the **Tasks** tab (tick it off when done);
+   deadlines show under **Upcoming meetings & deadlines** with reminders and raise the item's priority.
 
 First-time setup with your real accounts is a page in the app (**Setup** tab) and is described step by step in
 **[SETUP.md](SETUP.md)**. Your resume is already loaded into `workspace/cv/cv.md`.
@@ -245,6 +253,9 @@ runs `steward app --no-window`. Without the dashboard: `steward run` (same loop,
 | Stop being asked about this kind of thing | Don't ask again... | `steward dont-ask 12 [--tech Kubernetes] [--silent]` |
 | Execute all decisions | Go | `steward go` |
 | Correct something done automatically | This was wrong... | `steward override 15 --note "..." --corrected "..."` |
+| Have it do something else instead | "Or tell Steward what to do instead" field | `steward instruct 12 "Decline politely"` |
+| Teach a rule for future replies | "Teach Steward a rule" field | `steward teach 12 "Ask for the end client" --scope company --redraft` |
+| Track things you must do | Tasks tab, task suggestions on items | `steward tasks`, `--add "..." --due 2026-10-30T17:00`, `--done 3`, `--accept 4` |
 | Accept/dismiss suggested automation | Accept / Dismiss | `steward accept 3`, `steward dismiss 3` |
 | See or change rules | Rules & learning tab | `steward rules`, `steward rules retire 2` |
 | Standing preferences | Rules & learning tab | `steward prefs --add "Always add a 15 minute buffer before calls"` |
