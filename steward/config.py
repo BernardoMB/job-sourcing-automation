@@ -18,11 +18,15 @@ DEFAULT_CONFIG_NAME = "steward.yaml"
 
 
 class ServerSpec(BaseModel):
-    """Run an external MCP server instead of the built-in one."""
+    """An external MCP server: started over stdio (`command`) or reached over HTTP (`url`)."""
 
-    command: str
+    command: str = ""
     args: list[str] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
+    # Streamable-HTTP endpoint, e.g. http://127.0.0.1:47830/mcp; takes precedence over `command`.
+    url: str = ""
+    # Name of the .env variable holding the bearer token for `url`.
+    token_env: str = ""
     # Maps Steward's logical tool names to the external server's tool names.
     tools: dict[str, str] = Field(default_factory=dict)
 
@@ -124,9 +128,14 @@ class LinkedInConfig(BaseModel):
     min_delay_seconds: int = 60
     max_delay_seconds: int = 240
     # The upstream LinkedIn MCP server that drives your own logged-in browser
-    # session (for example the linkedin-toolkit Chrome extension + MCP server).
+    # session (for example the linkedin-toolkit Edge/Chrome extension + MCP server).
     upstream: ServerSpec | None = None
     server: ServerSpec | None = None
+    # When upstream.url points at this machine, Steward keeps the toolkit's long-running bridge
+    # (`lit serve --http`) alive so the browser extension stays connected to it.
+    manage_bridge: bool = True
+    bridge_command: list[str] = Field(
+        default_factory=lambda: ["npx", "-y", "-p", "linkedin-toolkit-mcp", "lit", "serve", "--http"])
 
 
 class NotionConfig(BaseModel):

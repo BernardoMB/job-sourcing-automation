@@ -126,9 +126,9 @@ priority. If it cannot tell who called, it puts a "call them back" item at the t
 
 ## 6. LinkedIn (Setup → step 6)
 
-Steward talks to LinkedIn only through **your own logged-in Chrome**, via the open-source
-[linkedin-toolkit](https://github.com/OpenRecruiterTools/linkedin-toolkit) (Chrome extension + local server).
-Node.js is already installed on this computer.
+Steward talks to LinkedIn only through **your own logged-in browser** (Microsoft Edge or Chrome), via the
+open-source [linkedin-toolkit](https://github.com/OpenRecruiterTools/linkedin-toolkit) (browser extension + a
+local bridge). Node.js is already installed on this computer.
 
 1. In a terminal, run once:
 
@@ -137,15 +137,32 @@ Node.js is already installed on this computer.
    ```
 
    It downloads the extension, prints its folder, and prints a pairing token.
-2. In Chrome open `chrome://extensions`, turn on **Developer mode**, **Load unpacked**, and choose that folder.
-3. Open the extension's popup → **Settings → Local bridge**, paste the pairing token.
-4. In Steward's Setup step 6, press **Use linkedin-toolkit**, then **Test connection**. Steward lists the
-   toolkit's tools and shows which ones it will use to read conversations and send replies.
-5. The toolkit queues every send for its own approval (Copilot mode). Either approve those in its popup, or turn
+2. In Edge open `edge://extensions` (in Chrome, `chrome://extensions`), turn on **Developer mode**, choose
+   **Load unpacked**, and pick that folder.
+3. Open the extension's popup → **Settings → Local bridge**, paste the pairing token, and enable the bridge.
+4. In Steward's Setup step 6, press **Use linkedin-toolkit**. Then paste the same pairing token into
+   **LinkedIn toolkit pairing token** and press **Save**. To print the token again:
+
+   ```bash
+   npx -y -p linkedin-toolkit-mcp lit config get token --reveal
+   ```
+
+5. Press **Test connection**. It confirms the bridge and the extension are connected and shows the toolkit tools
+   Steward uses: `linkedin_get_conversations` to list your inbox, `linkedin_get_messages` to read a thread, and
+   `linkedin_send_message` to reply to the person (by their LinkedIn `publicId`).
+6. The toolkit queues every send for its own approval (Copilot mode). Either approve those in its popup, or turn
    on its **Autopilot** in the popup so the replies you already approved in Steward go out at its human pace.
 
-Keep Chrome open and signed in to LinkedIn. Steward checks LinkedIn every 10 minutes and sends at most 8 messages
-an hour and 30 a day, only during business hours. Any LinkedIn automation carries some account risk.
+**Steward runs the toolkit's bridge for you.** The extension connects to a long-running local bridge
+(`lit serve --http`, on 127.0.0.1 ports 47829/47830). Steward starts it when it starts, restarts it if it stops,
+and talks to it at `http://127.0.0.1:47830/mcp` with your pairing token. Its errors are logged to
+`workspace/data/logs/linkedin-bridge.log`.
+
+Keep Edge open and signed in to LinkedIn: the extension only works while the browser runs. (Edge can keep
+extensions running after you close its windows: **Settings → System and performance → Continue running background
+extensions and apps when Microsoft Edge is closed**.) On its first check Steward only looks at threads active in the
+past 7 days. It then checks every 10 minutes and sends at most 8 messages an hour and 30 a day, only during
+business hours. Any LinkedIn automation carries some account risk.
 
 ## 7. Notion (optional, Setup → step 7)
 

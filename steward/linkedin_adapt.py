@@ -17,13 +17,28 @@ UPSTREAM_RULES: dict[str, tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...
                      ("message", "reply", "dm"),
                      ("list", "get", "read", "connection", "invite", "inmail", "post", "comment")),
 }
+# When a tool's input schema is known: listing the inbox needs no arguments, while reading one
+# thread or sending a message does. (This is what tells "get_conversations" from "get_messages".)
+NEEDS_ARGUMENTS = {"list_conversations": False, "get_conversation": True, "send_message": True}
+
 # Steward's argument -> (exact names an upstream tool might use, root words to look for otherwise).
 ARG_SYNONYMS = {
     "conversation_id": (("conversation_id", "conversationId", "thread_id", "threadId", "conversationUrn", "chat_id",
                          "id", "urn"), ("conversation", "thread", "chat")),
+    "recipient_public_id": (("publicId", "public_id", "recipientPublicId", "recipient", "profileId", "memberId"),
+                            ("publicid", "recipient", "profileid")),
     "text": (("text", "message", "body", "content", "messageText"), ("text", "message", "body", "content")),
     "limit": (("limit", "count", "max", "maxResults", "pageSize", "page_size"), ("limit", "count", "max", "size")),
+    "since": (("since", "sinceMs", "after", "updatedAfter"), ("since", "after")),
 }
+
+
+def _required(spec: Any) -> list[str] | None:
+    """The tool's required arguments, or None when Steward doesn't know its schema."""
+    schema = spec.get("schema") if isinstance(spec, dict) else None
+    if not isinstance(schema, dict) or not schema:
+        return None
+    return list(schema.get("required") or [])
 
 
 def pick_upstream_tool(logical: str, tools: dict[str, Any], configured: dict[str, str]) -> str:
@@ -34,6 +49,9 @@ def pick_upstream_tool(logical: str, tools: dict[str, Any], configured: dict[str
     for name in tools:
         low = name.lower()
         if not any(w in low for w in must) or any(w in low for w in avoid):
+            continue
+        required = _required(tools[name])
+        if required is not None and bool(required) != NEEDS_ARGUMENTS[logical]:
             continue
         score = 2 * sum(w in low for w in must) + sum(w in low for w in helps)
         if score > best_score or (score == best_score and best and len(name) < len(best)):

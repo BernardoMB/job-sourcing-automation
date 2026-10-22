@@ -27,6 +27,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from steward import briefing as briefing_mod
 from steward import decisions
+from steward import linkedin_bridge
 from steward import setup as setup_mod
 from steward import tasks as tasks_mod
 from steward.llm import LLMError
@@ -447,17 +448,25 @@ def create_app(cfg: Config, watch: bool = True, tick: int | None = None) -> Fast
         if name not in tools:
             raise HTTPException(404, "unknown integration")
         tool, args = tools[name]
+        if name == "linkedin":
+            await asyncio.to_thread(linkedin_bridge.ensure_running, C())
         try:
             async with MCPHub(C()) as hub:
                 res = await hub.call(name, tool, args, timeout=120)
+                if name == "linkedin" and res.get("tools"):
+                    # Reaching the bridge is not enough: the browser extension must be connected too.
+                    await hub.call("linkedin", "list_conversations", {"since": now_iso(), "limit": 1}, timeout=120)
+                    res["extension"] = "connected"
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "detail": str(exc)[:500]}
         detail = {
             "mail": lambda r: f"Connected to {r.get('address')} ({r.get('backend')}, folder {r.get('folder')})",
             "calendar": lambda r: f"Connected. {len(r.get('invites', []))} unanswered invitation(s) in the next 2 days.",
             "cv": lambda r: f"{r.get('name')}: {r.get('total_years')} years, {len(r.get('recent_roles', []))} recent roles",
-            "linkedin": lambda r: ("Upstream tools: " + ", ".join(r.get("tools", [])[:40]) +
-                                   f" | using: {r.get('mapping')}") if r.get("tools") else f"backend {r.get('backend')}",
+            "linkedin": lambda r: (f"Bridge and browser extension connected. Reading with "
+                                   f"{r['mapping'].get('list_conversations')} / {r['mapping'].get('get_conversation')}, "
+                                   f"replying with {r['mapping'].get('send_message')}.") if r.get("tools")
+            else f"backend {r.get('backend')}",
             "notion": lambda r: f"Database '{r.get('title')}' reachable",
         }[name](res)
         return {"ok": True, "detail": detail}

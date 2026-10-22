@@ -16,7 +16,7 @@ import re
 from datetime import timedelta
 from typing import Any
 
-from steward import decisions, notify, pipeline, priority
+from steward import decisions, linkedin_bridge, notify, pipeline, priority
 from steward import tasks as tasks_mod
 from steward.agents import classifier, cv_analyst, drafter, fewshot, instructor, scheduler
 from steward.agents.base import AgentContext
@@ -66,6 +66,9 @@ class Steward:
     # -- the cycle --------------------------------------------------------------
     async def cycle(self, force: bool = False) -> dict[str, Any]:
         summary: dict[str, Any] = {"ingested": {}, "processed": 0, "auto_executed": 0, "errors": []}
+        bridge = await asyncio.to_thread(linkedin_bridge.ensure_running, self.cfg)
+        if bridge.get("note"):
+            summary["errors"].append(f"linkedin bridge: {bridge['note']}")
         async with MCPHub(self.cfg) as hub:
             for source, fn, minutes in (
                 ("email", self.ingest_email, self.cfg.mail.poll_minutes),

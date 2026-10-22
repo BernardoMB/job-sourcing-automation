@@ -28,6 +28,13 @@ def make_server(name: str, instructions: str) -> MCPServer:
     return MCPServer(name, instructions=instructions, log_level="WARNING")
 
 
+def _leaf(exc: BaseException) -> BaseException:
+    """The real error inside nested ExceptionGroups (async task groups wrap failures in them)."""
+    while isinstance(exc, BaseExceptionGroup) and exc.exceptions:
+        exc = exc.exceptions[0]
+    return exc
+
+
 def guarded(fn: F) -> F:
     """Surface tool failures to the client as readable errors instead of opaque crashes."""
 
@@ -40,7 +47,8 @@ def guarded(fn: F) -> F:
             except ToolError:
                 raise
             except Exception as exc:  # noqa: BLE001
-                raise ToolError(f"{type(exc).__name__}: {exc}") from exc
+                leaf = _leaf(exc)
+                raise ToolError(f"{type(leaf).__name__}: {leaf}") from exc
 
         return async_wrapper  # type: ignore[return-value]
 

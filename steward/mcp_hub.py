@@ -92,6 +92,8 @@ class MCPHub:
             keys.append(self.cfg.mail.password_env)
         elif name == "notion":
             keys.append(self.cfg.notion.token_env)
+        elif name == "linkedin" and self.cfg.linkedin.upstream and self.cfg.linkedin.upstream.token_env:
+            keys.append(self.cfg.linkedin.upstream.token_env)
         return {k: os.environ[k] for k in keys if k in os.environ}
 
     def _params(self, name: str) -> StdioServerParameters:

@@ -929,7 +929,9 @@ async function renderSetup() {
       <div class="meta">OAuth client file: <span class="mono">${esc(S.paths.google_credentials)}</span></div>
       <div class="buttons">${save(["calendar.backend", "scheduling.work_start", "scheduling.work_end", "scheduling.buffer_minutes"])}
       <button class="btn small" id="googleBtn">Connect Google Calendar</button> ${test("calendar")}</div>`)}
-    ${step(6, "linkedin", "LinkedIn (through your own Chrome)", `<div class="meta">Install the linkedin-toolkit Chrome extension and pair it (SETUP.md step 6), then:</div>
+    ${step(6, "linkedin", "LinkedIn (through your own browser)", `<div class="meta">Uses the linkedin-toolkit extension in your browser (Edge or Chrome), paired as in SETUP.md step 6. Steward keeps the toolkit's bridge running in the background; keep the browser with the extension open.</div>
+      ${secret("LINKEDIN_TOOLKIT_TOKEN")}
+      <div class="meta">Get the token with: <span class="mono">npx -y -p linkedin-toolkit-mcp lit config get token --reveal</span></div>
       <div class="grid2">${field("linkedin.backend", "Backend", ["disabled", "upstream", "sandbox"])}</div>
       <div class="buttons"><button class="btn small primary" id="liUse">Use linkedin-toolkit</button>${save(["linkedin.backend"], "Save backend")} ${test("linkedin")}</div>`)}
     ${step(7, "notion", "Notion pipeline (optional)", `${secret("NOTION_TOKEN")}
@@ -964,7 +966,9 @@ async function renderSetup() {
     catch (e) { out.className = "result bad"; out.textContent = " " + e.message; }
   }));
   $("#googleBtn").addEventListener("click", () => { toast("A Google sign-in page opens in your browser. Finish it there.", 8000); act(() => api("/api/setup/google-auth", "POST", {}), "Google Calendar connected.").then(renderSetup); });
-  $("#liUse").addEventListener("click", () => act(() => api("/api/setup/config", "POST", { changes: { "linkedin.backend": "upstream", "linkedin.upstream": { command: "npx", args: ["linkedin-toolkit-mcp"] } } }), "LinkedIn set to linkedin-toolkit. Press Test connection.").then(renderSetup));
+  $("#liUse").addEventListener("click", () => act(() => api("/api/setup/config", "POST", { changes: { "linkedin.backend": "upstream",
+    "linkedin.upstream": { url: "http://127.0.0.1:47830/mcp", token_env: "LINKEDIN_TOOLKIT_TOKEN", command: "", args: [], env: {}, tools: {} } } }),
+    "LinkedIn set to the linkedin-toolkit bridge. Save the pairing token, then press Test connection.").then(renderSetup));
   $("#notionBtn").addEventListener("click", () => { const page = $("#notionPage").value.trim(); if (!page) return toast("Paste the Notion page link first."); act(() => api("/api/setup/notion", "POST", { page }), (r) => `Notion database created${r.url ? ": " + r.url : ""}.`).then(renderSetup); });
   $("#notifSave").addEventListener("click", () => {
     const ntfy = host.querySelector('[data-k="notifications.ntfy_url"]').value.trim(), chat = host.querySelector('[data-k="notifications.telegram_chat_id"]').value.trim();

@@ -24,6 +24,7 @@ SECRETS = {
     "STEWARD_MAIL_PASSWORD": "Email app password",
     "NOTION_TOKEN": "Notion integration secret",
     "TELEGRAM_BOT_TOKEN": "Telegram bot token (optional notifications)",
+    "LINKEDIN_TOOLKIT_TOKEN": "LinkedIn toolkit pairing token",
 }
 
 # Settings the dashboard may change. Anything else stays a deliberate edit of steward.yaml.
@@ -199,14 +200,28 @@ def checks(cfg: Config) -> list[dict[str, Any]]:
                          "Set the calendar backend to google for your real calendar."))
 
     li = cfg.linkedin
-    if li.backend == "upstream":
+    if li.backend == "upstream" and li.upstream is not None and li.upstream.url:
+        from steward.linkedin_bridge import status as bridge_status
+
+        token_ok = not li.upstream.token_env or bool(os.environ.get(li.upstream.token_env))
+        bridge = bridge_status(cfg)
+        problems = [p for p, bad in (("pairing token not saved", not token_ok),
+                                     ("bridge not running yet (Steward starts it on its next check)",
+                                      bridge.get("local") and not bridge.get("running"))) if bad]
+        out.append(_step("linkedin", "LinkedIn", "todo" if not token_ok else ("warn" if problems else "ok"),
+                         f"linkedin-toolkit bridge at {li.upstream.url}" + (" · " + "; ".join(problems) if problems else
+                                                                            " · running"),
+                         "Paste the pairing token below (from: npx -y -p linkedin-toolkit-mcp lit config get token "
+                         "--reveal), keep Edge (or the browser with the extension) open, then press Test connection."))
+    elif li.backend == "upstream":
         ok = li.upstream is not None
-        out.append(_step("linkedin", "LinkedIn", "ok" if ok else "todo",
-                         f"via {li.upstream.command} {' '.join(li.upstream.args)}" if ok else "upstream not configured",
-                         "Install the linkedin-toolkit Chrome extension and MCP server (see SETUP.md)."))
+        out.append(_step("linkedin", "LinkedIn", "warn" if ok else "todo",
+                         f"via {li.upstream.command} {' '.join(li.upstream.args)} (started per check; the extension "
+                         "may not stay connected)" if ok else "upstream not configured",
+                         "Press 'Use linkedin-toolkit' to switch to the always-on bridge."))
     else:
         out.append(_step("linkedin", "LinkedIn", "off" if li.backend == "disabled" else "warn", f"backend: {li.backend}",
-                         "Optional. See SETUP.md step 6 to connect LinkedIn through your own Chrome session."))
+                         "Optional. See SETUP.md step 6 to connect LinkedIn through your own browser session."))
 
     n = cfg.notion
     if n.enabled:
