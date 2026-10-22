@@ -187,6 +187,9 @@ class Executor:
                    force: bool = False) -> dict[str, Any]:
         p = action["payload"]
         kind = action["type"]
+        gaps = decisions.unfilled([action])
+        if gaps:
+            raise ValueError(f"The reply still contains {gaps[0]}; it was not sent. Edit it and approve it again")
         if kind == "send_email":
             if any(channels.is_linkedin_address(t) for t in p["to"] + (p.get("cc") or [])):
                 raise ValueError("Job Sourcer never emails LinkedIn addresses; LinkedIn messages are answered on "

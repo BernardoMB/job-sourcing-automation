@@ -799,12 +799,13 @@ class Steward:
                 log.warning("notion pull failed: %s", exc)
         self.db.update("events", event["id"], {"opportunity_id": opp["id"] if opp else None})
 
-        # A newer message in the same thread makes any undecided draft stale.
+        # A newer message in the same thread makes any draft that has not gone out stale (undecided, waiting,
+        # deferred, or failed): re-executing it later would answer an old message.
         self.db.execute(
-            "UPDATE drafts SET status = 'superseded', status_reason = 'A newer message arrived in this thread.' "
-            "WHERE status IN ('pending', 'approved', 'edited', 'rejected') AND event_id IN "
-            "(SELECT id FROM events WHERE thread_key = ? AND source = ? AND id != ?)",
-            (event.get("thread_key") or "-", event["source"], event["id"]))
+            "UPDATE drafts SET status = 'superseded', status_reason = 'A newer message arrived in this thread.', "
+            "closed_at = ? WHERE status IN ('pending', 'approved', 'edited', 'rejected', 'queued', 'deferred', 'failed') "
+            "AND event_id IN (SELECT id FROM events WHERE thread_key = ? AND source = ? AND id != ?)",
+            (now_iso(), event.get("thread_key") or "-", event["source"], event["id"]))
 
         added = await self._add_invites(ctx, event, cls, opp)
         evidence = await cv_analyst.analyze(ctx, cls)

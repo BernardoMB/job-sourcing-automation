@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -133,7 +134,12 @@ def test_discard_and_reexecute_from_the_queue(workspace):
         b = client.get("/api/briefing").json()
         li = [v for v in b["needs_decision"] + b["high_priority"] if v["channel"] == "linkedin"]
         for v in li[:2]:
-            client.post(f"/api/drafts/{v['id']}/decision", json={"decision": "approve"}, headers=h)
+            # Fill in any [NEEDS YOUR INPUT] part first, as you would: approving with it left in is refused.
+            actions = [{"payload": {"text": re.sub(r"\[NEEDS YOUR INPUT[^\]]*\]", "next month", a["payload"]["text"])}}
+                       if a["type"] == "send_linkedin" else {} for a in v["actions"]]
+            res = client.post(f"/api/drafts/{v['id']}/decision", json={"decision": "approve", "actions": actions},
+                              headers=h)
+            assert res.status_code == 200, res.text
         client.post("/api/go", headers=h)
         keep, drop = li[0]["id"], li[1]["id"]
         q = {x["id"]: x for x in client.get("/api/queue").json()["items"]}
@@ -156,6 +162,25 @@ def test_discard_and_reexecute_from_the_queue(workspace):
         s = Steward(cfg)
         assert [e["draft_id"] for e in s.ledger.entries("discard")] == [drop]
         s.db.close()
+
+
+def test_replies_with_a_placeholder_are_never_sent(steward):
+    run(steward.cycle(force=True))
+    d = next(d for d in steward.db.query("SELECT * FROM drafts WHERE status = 'pending'")
+             if "[NEEDS YOUR INPUT" in d["actions_json"])
+    try:
+        decisions.stage(steward.db, d["id"], "approve")
+        raise AssertionError("approving a reply with a placeholder must be refused")
+    except decisions.DecisionError as exc:
+        assert "Fill in [NEEDS YOUR INPUT" in str(exc)
+    # Even if one got queued some other way, the executor will not send it.
+    steward.db.update("drafts", d["id"], {"status": "queued"})
+    run(steward.go())
+    assert steward.db.get_draft(d["id"])["status"] == "failed"
+    assert "still contains [NEEDS YOUR INPUT" in steward.db.get_draft(d["id"])["status_reason"]
+    assert sandbox_json(steward, "outbox.json")["sent"] == [] or all(
+        "[NEEDS YOUR INPUT" not in m["body"] for m in sandbox_json(steward, "outbox.json")["sent"])
+    assert all("[NEEDS YOUR INPUT" not in m.get("text", "") for m in sandbox_json(steward, "linkedin.json")["sent"])
 
 
 def test_toolkit_queue_is_followed_and_reexecuted(workspace, tmp_path, monkeypatch):

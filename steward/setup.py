@@ -209,9 +209,14 @@ def checks(cfg: Config) -> list[dict[str, Any]]:
 
         token_ok = not li.upstream.token_env or bool(os.environ.get(li.upstream.token_env))
         bridge = bridge_status(cfg)
+        # linkedin-toolkit 2.1.1 cannot send messages unpatched (patches/linkedin-toolkit-2.1.1).
+        ext = Path.home() / ".linkedin-toolkit" / "extension" / "src" / "background" / "voyager.js"
+        unpatched = ext.exists() and "Job Sourcer patch" not in ext.read_text(encoding="utf-8", errors="replace")
         problems = [p for p, bad in (("pairing token not saved", not token_ok),
                                      ("bridge not running yet (Job Sourcer starts it on its next check)",
-                                      bridge.get("local") and not bridge.get("running"))) if bad]
+                                      bridge.get("local") and not bridge.get("running")),
+                                     ("the extension cannot send messages until you apply "
+                                      "patches/linkedin-toolkit-2.1.1 (see its README)", unpatched)) if bad]
         out.append(_step("linkedin", "LinkedIn", "todo" if not token_ok else ("warn" if problems else "ok"),
                          f"linkedin-toolkit bridge at {li.upstream.url}" + (" · " + "; ".join(problems) if problems else
                                                                             " · running"),

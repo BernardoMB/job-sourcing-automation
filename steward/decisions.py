@@ -8,6 +8,7 @@ training data) and the executor runs the approved actions in one batch.
 from __future__ import annotations
 
 import difflib
+import re
 from typing import Any
 
 from steward.config import Config
@@ -79,6 +80,20 @@ def _require_open(draft: dict[str, Any] | None) -> dict[str, Any]:
     return draft
 
 
+PLACEHOLDER = re.compile(r"\[NEEDS YOUR INPUT[^\]]*\]", re.IGNORECASE)
+
+
+def unfilled(actions: list[dict[str, Any]]) -> list[str]:
+    """[NEEDS YOUR INPUT: ...] placeholders still in a reply that would be sent."""
+    out: list[str] = []
+    for a in actions:
+        if a.get("skip") or a.get("type") not in ("send_email", "send_linkedin"):
+            continue
+        p = a.get("payload") or {}
+        out += PLACEHOLDER.findall(f"{p.get('subject', '')}\n{p.get('body') or p.get('text') or ''}")
+    return out
+
+
 def stage(db: Database, draft_id: int, decision: str, edited_actions: list[dict[str, Any]] | None = None,
           note: str = "") -> dict[str, Any]:
     draft = _require_open(db.get_draft(draft_id))
@@ -90,6 +105,10 @@ def stage(db: Database, draft_id: int, decision: str, edited_actions: list[dict[
         return db.get_draft(draft_id)  # type: ignore[return-value]
     original = loads(draft["actions_json"], [])
     final = _merge_edits(original, edited_actions) if edited_actions else original
+    gaps = unfilled(final)
+    if gaps:
+        raise DecisionError(f"Fill in {gaps[0]} before approving: it would be sent as is. Edit the reply, or tell "
+                            "Job Sourcer what to say instead.")
     changed = dumps(final) != dumps(original)
     db.update("drafts", draft_id, {
         "status": "edited" if changed else "approved",
