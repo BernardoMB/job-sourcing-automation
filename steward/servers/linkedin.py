@@ -378,6 +378,23 @@ class UpstreamLinkedIn:
                         "error": str(err.get("message") or ""), "error_code": str(err.get("code") or "")})
         return out
 
+    async def health(self) -> dict[str, Any]:
+        """The toolkit's status (extension, login, mode, hours, quotas) and a real read of the inbox."""
+        out: dict[str, Any] = {"status": {}, "threads": None, "messages_read": None, "read_error": ""}
+        async with self._open() as call:
+            out["status"] = await call("status", {})
+            try:
+                raw = await call("list_conversations", {"limit": 5})
+                threads = raw if isinstance(raw, list) else (raw.get("threads") or raw.get("conversations") or [])
+                out["threads"] = len(threads)
+                if threads:
+                    conv = self._norm_conv(threads[0])
+                    msgs = await call("get_conversation", {"conversation_id": conv["id"], "limit": 5})
+                    out["messages_read"] = len(self._norm_messages(msgs, set()))
+            except Exception as exc:  # noqa: BLE001 - reported, not raised: the status above still tells a lot
+                out["read_error"] = str(exc)[:500]
+        return out
+
     async def queue_decide(self, queue_ids: list[str], approve: bool) -> dict[str, Any]:
         """Send (approve) or drop (reject) queued items. The toolkit allows this only in Autopilot mode."""
         async with self._open() as call:
@@ -439,6 +456,17 @@ async def toolkit_queue() -> dict[str, Any]:
     if not isinstance(b, UpstreamLinkedIn):
         return {"supported": False, "items": []}
     return {"supported": True, "items": await b.queue()}
+
+
+@mcp.tool(annotations=READ_ONLY_REMOTE)
+@guarded
+async def health() -> dict[str, Any]:
+    """Is LinkedIn usable: the toolkit's status (extension, login, mode, hours, quotas) and a real inbox read."""
+    b = backend()
+    if not isinstance(b, UpstreamLinkedIn):
+        convs = await b.list(None, 5) if isinstance(b, SandboxLinkedIn) else []
+        return {"backend": li_cfg.backend, "threads": len(convs)}
+    return {"backend": "upstream", **(await b.health())}
 
 
 @mcp.tool(annotations=WRITE)

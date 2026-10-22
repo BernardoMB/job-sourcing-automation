@@ -25,7 +25,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 
-from steward import ASSETS, activity, work_queue
+from steward import ASSETS, activity, linkedin_health, work_queue
 from steward import briefing as briefing_mod
 from steward import decisions
 from steward import linkedin_bridge
@@ -96,10 +96,20 @@ def create_app(cfg: Config, watch: bool = True, tick: int | None = None) -> Fast
             await run_cycle(trigger="scheduled")
             await asyncio.sleep(max(int(tick or C().dashboard.tick_seconds), 5))
 
+    async def check_linkedin(trigger: str) -> dict[str, Any]:
+        async with lock:
+            result = await linkedin_health.check(steward, trigger)
+        bump("linkedin")
+        return result
+
+    async def at_startup() -> None:
+        await check_linkedin("startup")  # can it read, send, act? Logged in the Logs tab
+        await background()
+
     @contextlib.asynccontextmanager
     async def lifespan(_: FastAPI):
         steward.rescore()
-        task = asyncio.create_task(background()) if watch else None
+        task = asyncio.create_task(at_startup()) if watch else None
         yield
         if task:
             task.cancel()
@@ -404,6 +414,11 @@ def create_app(cfg: Config, watch: bool = True, tick: int | None = None) -> Fast
             raise bad(exc)
         bump("discarded", id=draft_id)
         return res
+
+    @app.post("/api/linkedin/check")
+    async def linkedin_check() -> dict[str, Any]:
+        res = await check_linkedin("you pressed Check LinkedIn now")
+        return {k: v for k, v in res.items() if k != "problems"} | {"problems": [p for _, p in res.get("problems", [])]}
 
     @app.get("/api/queue")
     async def get_queue() -> dict[str, Any]:

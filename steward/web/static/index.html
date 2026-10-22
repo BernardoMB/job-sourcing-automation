@@ -326,9 +326,9 @@ function renderHeader() {
   badge.textContent = c.undecided; badge.classList.toggle("hidden", !c.undecided);
   const tb = $("#taskBadge"), tn = (c.tasks_open || 0) + (c.tasks_suggested || 0);
   tb.textContent = tn; tb.classList.toggle("hidden", !tn);
-  const qb = $("#queueBadge");
-  qb.textContent = c.in_flight; qb.classList.toggle("hidden", !c.in_flight);
-  qb.title = `${c.in_flight} queued, running, deferred, or failed`;
+  const qb = $("#queueBadge"), qn = (c.staged || 0) + (c.in_flight || 0);
+  qb.textContent = qn; qb.classList.toggle("hidden", !qn);
+  qb.title = `${c.staged || 0} pending confirmation (press Go), ${c.in_flight || 0} queued, running, deferred, or failed`;
   tb.title = `${c.tasks_open || 0} open, ${c.tasks_suggested || 0} suggested, ${c.tasks_due_soon || 0} due within 48 h or overdue`;
   document.title = c.undecided ? `(${c.undecided}) Job Sourcer` : "Job Sourcer";
 }
@@ -768,14 +768,18 @@ document.addEventListener("click", (e) => {
 
 // ---------- queue ----------
 const when = (iso) => iso ? new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
-const QUEUE_CHIP = { deferred: "warn", failed: "bad", executed: "ok", executing: "info", queued: "info", discarded: "", superseded: "" };
+const QUEUE_CHIP = { deferred: "warn", failed: "bad", executed: "ok", executing: "info", queued: "info", discarded: "", superseded: "", approved: "violet", edited: "violet", rejected: "violet" };
 const queueMenu = (r) => `<details class="dd"><summary class="btn small">Actions ▾</summary><div class="dd-menu">
   <button class="btn small" data-reexec="${r.id}" ${r.can_reexecute ? "" : "disabled"} title="${r.can_reexecute ? "Run it again now (skips LinkedIn business hours and pacing)" : "Nothing to run: it is done or closed"}">Re-execute</button>
   <button class="btn small danger" data-discard="${r.id}" ${r.can_discard ? "" : "disabled"} title="${r.can_discard ? "It will not run" : "It is done or closed already"}">Discard</button></div></details>`;
 async function renderQueue() {
   const { items } = await api("/api/queue");
   const host = $("#tab-queue");
-  host.innerHTML = `<p class="meta">Every decided action that has not finished, and what finished in the last day. LinkedIn replies wait for business hours (${esc(B.linkedin_hours || "set in steward.yaml")}); <b>Execute</b> sends one now. Click a row for each action's status.</p><div id="queueTable"></div>`;
+  const staged = B.counts.staged || 0;
+  host.innerHTML = `${staged ? `<div class="card blocker info"><b>${staged} decision${staged === 1 ? "" : "s"} pending confirmation</b>
+      <div class="meta">You decided ${staged === 1 ? "it" : "them"} in the briefing. Nothing runs until you press Go.</div>
+      <div class="buttons"><button class="btn primary" data-go-now>Go: execute ${staged} decision${staged === 1 ? "" : "s"}</button></div></div>` : ""}
+    <p class="meta">Every decided action that has not finished, and what finished in the last day. LinkedIn replies wait for business hours (${esc(B.linkedin_hours || "set in steward.yaml")}); <b>Execute</b> sends one now. Click a row for each action's status.</p><div id="queueTable"></div>`;
   dataTable($("#queueTable"), {
     id: "queue", rows: items, noun: "actions", defaultSort: { key: "updated", dir: "desc" },
     columns: [
@@ -823,7 +827,8 @@ async function renderLogs() {
       ${b.go ? `<div class="buttons"><button class="btn small" data-go-now>Go</button></div>` : ""}</div>`).join("")
       : `<div class="card"><b>Nothing is blocked.</b><div class="meta">Every decided action has run.</div></div>`}
     <h2 class="sec">Activity</h2>
-    <p class="meta">Every check (and what triggered it), every new message and why one was ignored, every action and its outcome. Newest first.</p>
+    <p class="meta">Every check (and what triggered it), every new message and why one was ignored, every action and its outcome. Newest first.
+      LinkedIn is checked when Job Sourcer starts (can it read, send, act?). <button class="btn small" id="liCheck">Check LinkedIn now</button></p>
     <div id="logTable"></div>`;
   dataTable($("#logTable"), {
     id: "logs", rows: entries, noun: "log lines", defaultSort: { key: "at", dir: "desc" },
@@ -837,6 +842,13 @@ async function renderLogs() {
   });
 }
 document.addEventListener("click", (ev) => { if (ev.target.closest("[data-go-now]")) $("#goBtn").click(); });
+document.addEventListener("click", async (ev) => {
+  const b = ev.target.closest("#liCheck");
+  if (!b) return;
+  b.disabled = true; b.textContent = "Checking LinkedIn…";
+  await act(() => api("/api/linkedin/check", "POST", {}), (r) => r.backend && r.backend !== "upstream" ? `LinkedIn is ${r.backend}.`
+    : `LinkedIn: reading ${r.read_ok ? "works" : "does NOT work"}, sending ${r.can_send ? "ready" : "NOT ready"}.`);
+});
 
 // ---------- decisions history ----------
 async function renderHistory() {

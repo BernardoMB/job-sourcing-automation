@@ -200,6 +200,12 @@ def run(once: bool = typer.Option(False, "--once", help="Run a single cycle and 
         _print_cycle(summary)
         return
     console.print(f"[bold]Job Sourcer is on duty.[/bold] Checking every {tick}s (Ctrl+C to stop).")
+    from steward import linkedin_health
+
+    li = asyncio.run(linkedin_health.check(s, "startup"))
+    if li.get("problems"):
+        for _, problem in li["problems"]:
+            console.print(f"[yellow]! LinkedIn: {escape(problem)}[/yellow]")
     try:
         asyncio.run(s.run_forever(tick))
     except KeyboardInterrupt:

@@ -13,6 +13,7 @@ import socket
 import subprocess
 import sys
 import time
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
@@ -21,6 +22,16 @@ from steward.config import Config
 _process: subprocess.Popen | None = None
 _last_start = 0.0
 RESTART_BACKOFF_SECONDS = 60
+EXTENSION_FILE = Path.home() / ".linkedin-toolkit" / "extension" / "src" / "background" / "voyager.js"
+
+
+def extension_patched() -> bool | None:
+    """Whether the installed linkedin-toolkit extension has the send fix (patches/linkedin-toolkit-2.1.1).
+
+    None when the extension is not installed in its default folder (nothing to tell)."""
+    if not EXTENSION_FILE.exists():
+        return None
+    return "Job Sourcer patch" in EXTENSION_FILE.read_text(encoding="utf-8", errors="replace")
 
 
 def _endpoint(cfg: Config) -> tuple[str, int] | None:

@@ -88,6 +88,17 @@ def _decide(ids: list[str], status: str) -> dict:
 
 
 @app.tool()
+def linkedin_get_status(verify: bool = False, postUrl: str = "") -> dict:
+    """Check that the extension is connected and the user is logged in (status, mode, hours, quotas)."""
+    pending = sum(1 for v in _queue().values() if v.get("status") == "pending")
+    return {"connected": True, "extensionVersion": "2.1.1", "loggedIn": os.environ.get("FAKE_LI_SIGNED_OUT") != "1",
+            "autopilot": not COPILOT, "businessHours": True,
+            "quotas": {"message": {"dailyUsed": 2, "dailyCap": 40}, "invite": {"dailyUsed": 0, "dailyCap": 20},
+                       "visit": {"dailyUsed": 1, "dailyCap": 80}, "search": {"dailyUsed": 0, "dailyCap": 300}},
+            "queue": {"pending": pending}, "bridge": {"enabled": True, "connected": True, "port": 47829}}
+
+
+@app.tool()
 def linkedin_queue_approve(ids: list[str], dry_run: bool = False) -> dict:
     """Approve queued writes by id so the extension sends them (Autopilot only)."""
     return _decide(ids, "sent")

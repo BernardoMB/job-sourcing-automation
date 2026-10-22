@@ -184,9 +184,9 @@ class Steward:
     async def execute_now(self, draft_id: int) -> dict[str, Any]:
         """Re-execute (and the Execute button): run a queued item now, skipping LinkedIn business hours and pacing.
 
-        Waiting for Go: committed and run. Deferred or failed: run again. Handed to the linkedin-toolkit: sent
-        from its queue if it is still waiting there (Autopilot), sent again if the toolkit failed it, and left
-        alone if the toolkit already sent it."""
+        Pending confirmation (approved, not yet Go): committed and run. Deferred or failed: run again. Handed
+        to the linkedin-toolkit: sent from its queue if it is still waiting there (Autopilot), sent again if
+        the toolkit failed it, and left alone if the toolkit already sent it."""
         draft = self.db.get_draft(draft_id)
         if draft is None or not queue_actions(self.db, draft)["can_reexecute"]:
             raise decisions.DecisionError("This item cannot be re-executed (it is done, discarded, or not decided yet)")

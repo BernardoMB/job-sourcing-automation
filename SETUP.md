@@ -239,8 +239,9 @@ Turn this on so Job Sourcer keeps watching even when its window is closed. Turni
   and two hours before (if notifications are on), and items with close deadlines move up the queue. Due times use
   the time zone from your profile.
 - Join the meetings it books (they appear under *Upcoming meetings & deadlines* with join links).
-- **Queue tab**: every decided action that has not finished (waiting for Go, queued, running, deferred, failed,
-  waiting in the LinkedIn toolkit) and what finished or was closed in the last days. LinkedIn replies wait for
+- **Queue tab**: every decision and action that has not finished: *Pending confirmation* (decided in the briefing,
+  waiting for you to press **Go**, which the Queue tab also offers), queued, running, deferred, failed, waiting in
+  the LinkedIn toolkit, and what finished or was closed in the last days. The tab's badge counts them. LinkedIn replies wait for
   `linkedin.business_hours`; **Execute** on a deferred item sends it now. Each item has **Actions ▾**:
   **Re-execute** runs it again now (a failed one, or one the LinkedIn toolkit failed or still holds), and
   **Discard** drops it for good (status *Discarded*; one waiting in the toolkit is rejected there too). The
@@ -254,8 +255,12 @@ Turn this on so Job Sourcer keeps watching even when its window is closed. Turni
   CodeSignal, TestGorilla, ...) becomes an open task with the test link and the deadline, listed under *Upcoming
   meetings & deadlines* with reminders. Reminders for the same test update that task instead of adding another.
   Tick it off in the Tasks tab when you are done.
-- **Logs tab**: *What's blocking right now* (deferred, failed, or interrupted actions, decisions waiting for Go,
-  Claude paused, a check that failed), then every check and what triggered it, every new message and why one
-  was ignored, and every action with its outcome.
+- **Logs tab**: *What's blocking right now* (deferred, failed, or interrupted actions, decisions pending
+  confirmation, Claude paused, a check that failed, LinkedIn not usable), then every check and what triggered it,
+  every new message and why one was ignored, and every action with its outcome.
+- **LinkedIn is checked when Job Sourcer starts** (and with *Check LinkedIn now* in the Logs tab): it really reads
+  your inbox, and for sending it reports what decides it (extension connected and signed in, the send fix applied,
+  Copilot or Autopilot, the toolkit's hours, messages left today, how the last send went), plus today's invite,
+  visit, and search quotas. The result is a line in the Logs tab, and a blocker until LinkedIn is usable again.
 
 All the CLI commands still work (`steward brief`, `steward go`, ...) if you ever want them.

@@ -20,11 +20,13 @@ UPSTREAM_RULES: dict[str, tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...
     "queue_list": (("queue",), ("list",), ("approve", "reject")),
     "queue_approve": (("queue",), ("approve",), ("list", "reject")),
     "queue_reject": (("queue",), ("reject",), ("list", "approve")),
+    # Extension connected, logged in, Copilot/Autopilot, business hours, quotas.
+    "status": (("status",), ("get",), ("connection", "queue", "campaign")),
 }
 # When a tool's input schema is known: listing the inbox needs no arguments, while reading one
 # thread or sending a message does. (This is what tells "get_conversations" from "get_messages".)
 NEEDS_ARGUMENTS = {"list_conversations": False, "get_conversation": True, "send_message": True,
-                   "queue_list": False, "queue_approve": True, "queue_reject": True}
+                   "queue_list": False, "queue_approve": True, "queue_reject": True, "status": False}
 
 # Job Sourcer's argument -> (exact names an upstream tool might use, root words to look for otherwise).
 ARG_SYNONYMS = {

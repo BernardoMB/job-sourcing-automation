@@ -17,13 +17,16 @@ from steward.timeutil import fmt_local, parse_iso, to_iso, utcnow
 
 ACTION_LABELS = {"send_email": "Email reply", "send_linkedin": "LinkedIn reply", "create_event": "Book meeting",
                  "rsvp_event": "Answer invitation", "add_to_calendar": "Add to calendar"}
-ACTIVE = ("approved", "edited", "queued", "executing", "deferred", "failed")
+ACTIVE = ("approved", "edited", "rejected", "queued", "executing", "deferred", "failed")
+STAGED = ("approved", "edited", "rejected")  # decided in the briefing, confirmed (run) only when you press Go
+PENDING = "Pending confirmation"
 
 
 def queue_actions(db: Database, draft: dict[str, Any]) -> dict[str, bool]:
     """Which of Re-execute / Discard make sense for a queue item right now."""
     handed = bool(db.query_one("SELECT 1 FROM executions WHERE draft_id = ? AND status = 'handed_off'", (draft["id"],)))
-    live = draft["status"] in ("approved", "edited", "queued", "deferred", "failed") or         (draft["status"] == "executed" and handed)
+    live = draft["status"] in ("approved", "edited", "queued", "deferred", "failed") or (
+        draft["status"] == "executed" and handed)
     return {"can_reexecute": live, "can_discard": live}
 
 
@@ -62,8 +65,8 @@ def items(cfg: Config, db: Database) -> list[dict[str, Any]]:
         handed = any(e["status"] == "handed_off" for e in execs.values())
         status = d["status"]
         label = {
-            "approved": "Waiting for Go" if not on_approve else "Queued", "edited": "Waiting for Go" if not on_approve else "Queued",
-            "queued": "Queued", "executing": "Running", "failed": "Failed",
+            "approved": PENDING if not on_approve else "Queued", "edited": PENDING if not on_approve else "Queued",
+            "rejected": PENDING, "queued": "Queued", "executing": "Running", "failed": "Failed",
             "deferred": f"Deferred until {fmt_local(nxt, tz_name)}" if nxt else "Deferred",
             "executed": "Waiting in the LinkedIn toolkit" if handed else "Done",
             "discarded": "Discarded", "superseded": "No longer needed",
@@ -72,13 +75,16 @@ def items(cfg: Config, db: Database) -> list[dict[str, Any]]:
                                                                     or d["created_at"]])
         out.append({
             "id": d["id"], "summary": d["summary"], "channel": d["channel"], "status": status, "status_label": label,
-            "reason": d["status_reason"] or ("Press Go (top right) to run it." if label == "Waiting for Go" else
-                                             "Approve it in the linkedin-toolkit extension popup (Copilot mode), or turn "
-                                             "on its Autopilot." if handed else ""),
+            "reason": d["status_reason"] or (
+                "You rejected it: nothing will be sent. Press Go to confirm." if status == "rejected" else
+                "You approved it. Press Go to confirm, and it starts processing." if label == PENDING else
+                "Approve it in the linkedin-toolkit extension popup (Copilot mode), or turn on its Autopilot."
+                if handed else ""),
             "decided_by": _decided_by(d), "next_attempt_at": nxt, "updated_at": updated,
-            "actions": [{"type": ACTION_LABELS.get(a["type"], a["type"]), "target": _target(a),
-                         "status": (execs.get(i) or {}).get("status", "not started"),
-                         "error": (execs.get(i) or {}).get("error") or ""} for i, a in enumerate(actions)],
+            "actions": [] if status == "rejected" else [
+                {"type": ACTION_LABELS.get(a["type"], a["type"]), "target": _target(a),
+                 "status": (execs.get(i) or {}).get("status", "not started"),
+                 "error": (execs.get(i) or {}).get("error") or ""} for i, a in enumerate(actions)],
             "can_execute": status == "deferred", **queue_actions(db, d),
         })
     return out
@@ -101,11 +107,12 @@ def blockers(cfg: Config, db: Database) -> list[dict[str, Any]]:
         elif q["status_label"] == "Waiting in the LinkedIn toolkit":
             out.append({"level": "warn", "draft_id": q["id"], "title": f"Waiting in the LinkedIn toolkit: {q['summary']}",
                         "detail": q["reason"]})
-    staged = [q for q in queue if q["status_label"] == "Waiting for Go"]
+    staged = [q for q in queue if q["status_label"] == PENDING]
     if staged:
-        out.append({"level": "info", "title": f"{len(staged)} decision{'s' if len(staged) != 1 else ''} waiting for Go",
-                    "detail": "Approved or edited items run only when you press Go (or switch on 'Act on each "
-                              "approval immediately').", "go": True})
+        out.append({"level": "info", "title": f"{len(staged)} decision{'s' if len(staged) != 1 else ''} pending "
+                                              "confirmation",
+                    "detail": "Decisions you made in the briefing run only when you press Go (or switch on 'Act on "
+                              "each approval immediately').", "go": True})
     stuck = db.scalar("SELECT COUNT(*) FROM executions WHERE status = 'unknown'") or 0
     if stuck:
         out.append({"level": "error", "title": f"{stuck} interrupted action{'s' if stuck != 1 else ''}",
@@ -115,6 +122,10 @@ def blockers(cfg: Config, db: Database) -> list[dict[str, Any]]:
     if pause and (parse_iso(pause.get("until")) or utcnow()) > utcnow():
         out.append({"level": "warn", "title": f"Claude is paused until {fmt_local(pause['until'], tz_name)}",
                     "detail": f"{pause.get('reason', '')} New messages are collected and drafted after that."})
+    health = db.kv_get("linkedin_health") or {}
+    for problem in health.get("problems", []) if not health.get("ok", True) else []:
+        out.append({"level": "error" if not health.get("read_ok", True) else "warn",
+                    "title": "LinkedIn is not fully usable", "detail": problem, "linkedin": True})
     for err in db.kv_get("last_check_errors", []) or []:
         out.append({"level": "error", "title": "The last check had a problem", "detail": str(err)[:600]})
     waiting = db.scalar("SELECT COUNT(*) FROM drafts WHERE status = 'pending'") or 0
