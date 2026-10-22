@@ -35,7 +35,7 @@ Two or three sentences about who you are professionally and what you are looking
 *Month YYYY – Present*
 
 - One bullet per achievement. Mention the technologies you used by name (e.g. Python, Kubernetes, AWS):
-  Steward computes your years of experience per technology from these role dates.
+  Job Sourcer computes your years of experience per technology from these role dates.
 
 ### Previous Title — Previous Company
 *Month YYYY – Month YYYY*
@@ -52,7 +52,7 @@ Two or three sentences about who you are professionally and what you are looking
 Degree — University, YYYY
 """
 
-ENV_TEMPLATE = """# Secrets for The Steward. Never commit this file.
+ENV_TEMPLATE = """# Secrets for Job Sourcer. Never commit this file.
 
 # Claude (the only paid service). Alternatively run `ant auth login`.
 ANTHROPIC_API_KEY=
@@ -100,7 +100,7 @@ def init_workspace(target: Path, sandbox: bool, force: bool = False, cv_source: 
         cfg.linkedin.min_delay_seconds = 0
         cfg.linkedin.max_delay_seconds = 0
         cfg.llm.provider = "anthropic" if os.environ.get("ANTHROPIC_API_KEY") else "offline"
-        cfg.dashboard.port = 8766  # so the demo never collides with your real Steward on 8765
+        cfg.dashboard.port = 8766  # so the demo never collides with your real Job Sourcer on 8765
         shutil.copy(PACKAGE_DATA / "cv.md", target / "cv" / "cv.md")
     else:
         cfg.mail.backend = "imap"
@@ -113,7 +113,7 @@ def init_workspace(target: Path, sandbox: bool, force: bool = False, cv_source: 
         elif not cv_file.exists():
             cv_file.write_text(CV_TEMPLATE, encoding="utf-8")
     config_path.write_text(
-        "# The Steward configuration. See README.md for every option.\n" + dump_config(cfg), encoding="utf-8"
+        "# Job Sourcer configuration. See README.md for every option.\n" + dump_config(cfg), encoding="utf-8"
     )
     env_file = target / ".env"
     if not env_file.exists():

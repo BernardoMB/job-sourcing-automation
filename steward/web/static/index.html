@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>The Steward</title>
+<title>Job Sourcer</title>
+<link rel="icon" type="image/png" href="/app-logo.png">
 <style>
 :root {
   --bg: #f6f5f2; --panel: #ffffff; --ink: #1d1f23; --muted: #646a73; --line: #e3e1db;
@@ -143,7 +144,7 @@ tr.detail td { background: var(--bg); }
 <body>
 <header class="top">
   <div class="top-inner">
-    <div class="brand"><b>The Steward</b><span id="status"><span class="dot off"></span>Loading...</span></div>
+    <div class="brand"><b>Job Sourcer</b><span id="status"><span class="dot off"></span>Loading...</span></div>
     <label class="switch" title="When on, each approval is sent/booked right away instead of waiting for Go"><input type="checkbox" id="instant"> Act on each approval immediately</label>
     <button class="btn small" id="alertsBtn" title="Show a desktop notification when something needs you">🔔 Desktop alerts</button>
     <button class="btn" id="pollBtn" title="Check email, LinkedIn and calendar now">Check now</button>
@@ -310,7 +311,7 @@ function renderHeader() {
   const tb = $("#taskBadge"), tn = (c.tasks_open || 0) + (c.tasks_suggested || 0);
   tb.textContent = tn; tb.classList.toggle("hidden", !tn);
   tb.title = `${c.tasks_open || 0} open, ${c.tasks_suggested || 0} suggested, ${c.tasks_due_soon || 0} due within 48 h or overdue`;
-  document.title = c.undecided ? `(${c.undecided}) The Steward` : "The Steward";
+  document.title = c.undecided ? `(${c.undecided}) Job Sourcer` : "Job Sourcer";
 }
 function notifyDesktop(title, body) {
   try { if ("Notification" in window && Notification.permission === "granted") new Notification(title, { body }); } catch (e) {}
@@ -332,7 +333,7 @@ function startStream() {
       if (parts.length) {
         const msg = parts.join(" · ") + (ev.waiting ? ` · ${ev.waiting} waiting for you${ev.high ? ` (${ev.high} high priority)` : ""}` : "");
         toast(msg, 6000);
-        if (ev.processed || ev.escalated) notifyDesktop("The Steward", msg);
+        if (ev.processed || ev.escalated) notifyDesktop("Job Sourcer", msg);
       }
     }
     if (isEditing()) {
@@ -409,7 +410,7 @@ function dontAskForm(v) {
       ${d.company ? `<label class="opt"><input type="checkbox" name="company" value="${esc(d.company)}"> only for ${esc(d.company)}</label>` : ""}
       <label class="opt"><input type="checkbox" name="channel" value="${esc(v.channel)}"> only on ${esc(v.channel)}</label>
     </fieldset>
-    <fieldset><legend>Next time, Steward should</legend>
+    <fieldset><legend>Next time, Job Sourcer should</legend>
       <label class="opt"><input type="radio" name="tier" value="auto_approve" checked> Act and tell me (shows under "Handled automatically")</label>
       <label class="opt"><input type="radio" name="tier" value="auto_send"> Act silently (ledger only)</label>
     </fieldset>
@@ -454,12 +455,12 @@ function draftCard(v) {
     <div class="buttons">${buttons}</div>
     <div class="dontask-slot"></div>
     <div class="steer">
-      <label>Or tell Steward what to do instead — it rewrites the reply and actions, and shows them here for your approval</label>
+      <label>Or tell Job Sourcer what to do instead — it rewrites the reply and actions, and shows them here for your approval</label>
       <textarea data-instr placeholder="e.g. Decline politely, I only want remote roles. · Propose Tuesday morning instead. · Ask for the salary range before scheduling. · Remind me to send my portfolio by Friday."></textarea>
       <div class="buttons"><button class="btn small" data-do="instruct">Revise with my instruction</button></div>
     </div>
     <div class="teach">
-      <label>Teach Steward a rule for future replies (how it should respond next time)</label>
+      <label>Teach Job Sourcer a rule for future replies (how it should respond next time)</label>
       <textarea data-rule-text placeholder="e.g. For staffing agencies, always ask who the end client is before sharing availability."></textarea>
       <div class="buttons">
         <select data-rule-scope>
@@ -499,10 +500,10 @@ function handledCard(v) {
   return `<article class="card" data-id="${v.id}">
     <div class="card-head"><span class="chip ok">done</span><h3>${esc(v.summary)}</h3></div>
     <div class="meta">Under rule “${esc(v.rule ? v.rule.name : "")}” · confidence ${pct(v.confidence)} · job advancement ${pct(v.job_advancement)}</div>
-    <details><summary>What Steward did</summary><pre class="msg">${sent}</pre></details>
+    <details><summary>What Job Sourcer did</summary><pre class="msg">${sent}</pre></details>
     <div class="buttons"><button class="btn small danger" data-do="wrong">This was wrong…</button></div>
     <div class="form hidden override">
-      <h4>Teach Steward</h4>
+      <h4>Teach Job Sourcer</h4>
       <input type="text" name="note" placeholder="What was wrong? (required)">
       <textarea name="corrected" style="margin-top:6px;min-height:120px" placeholder="What you would have sent instead (optional)">${esc(text)}</textarea>
       <div class="buttons"><button class="btn small primary" data-do="override">Record and demote the rule</button></div>
@@ -574,7 +575,7 @@ function renderBrief() {
           <select id="bsort">${[["priority", "Sort: priority"], ["newest", "Newest first"], ["oldest", "Oldest first"], ["confidence", "Most confident"], ["job", "Best for landing the job"]].map(([k, l]) => `<option value="${k}" ${BF.sort === k ? "selected" : ""}>${l}</option>`).join("")}</select>
           ${filtered ? `<span class="meta">${high.length + normal.length + handled.length} of ${all.length} shown</span><button class="btn small" id="bclear">Clear</button>` : ""}
         </div>
-        ${!B.high_priority.length && !B.needs_decision.length ? `<div class="card"><b>Nothing needs you right now.</b><div class="meta">Steward keeps watching${B.loop.watching ? " in the background" : ""}; new events appear here by themselves.</div></div>` : ""}
+        ${!B.high_priority.length && !B.needs_decision.length ? `<div class="card"><b>Nothing needs you right now.</b><div class="meta">Job Sourcer keeps watching${B.loop.watching ? " in the background" : ""}; new events appear here by themselves.</div></div>` : ""}
         ${section("⚠️ High priority", high, draftCard, "high")}
         ${section("📬 Needs your decision", normal, draftCard)}
         ${section("✅ Handled automatically", handled, handledCard)}
@@ -618,7 +619,7 @@ document.addEventListener("click", async (ev) => {
   const ranMsg = (r) => r.executed ? `Done: ${r.executed.status}${r.executed.reason ? " — " + r.executed.reason : ""}` : (B.settings.execute_on_approve ? "Approved." : "Approved — it runs when you press Go.");
   if (what === "approve") return act(() => api(`/api/drafts/${id}/decision`, "POST", { decision: "approve", actions: collectActions(card, v) }), ranMsg);
   if (what === "reject") {
-    const note = prompt("Why reject it? (optional — this teaches Steward)") ?? null;
+    const note = prompt("Why reject it? (optional — this teaches Job Sourcer)") ?? null;
     if (note === null) return;
     return act(() => api(`/api/drafts/${id}/decision`, "POST", { decision: "reject", note }), "Rejected.");
   }
@@ -642,7 +643,7 @@ document.addEventListener("click", async (ev) => {
   }
   if (what === "instruct") {
     const text = card.querySelector("[data-instr]").value.trim();
-    if (!text) return toast("Write what Steward should do instead.");
+    if (!text) return toast("Write what Job Sourcer should do instead.");
     btn.disabled = true; btn.textContent = "Revising… (this takes a few seconds)";
     const r = await act(() => api(`/api/drafts/${id}/instruct`, "POST", { instruction: text }),
       (res) => `Revised: ${(res.summary || "new draft ready").replace(/\.$/, "")}${res.warnings && res.warnings.length ? " · " + res.warnings.join(" ").replace(/\.$/, "") : ""}. Review it and approve.`);
@@ -689,7 +690,7 @@ async function renderTasks() {
   const oppOpts = (cur) => `<option value="">(no opportunity)</option>` + T.opportunities.map(o => `<option value="${o.id}" ${o.id === cur ? "selected" : ""}>${esc(o.label)}</option>`).join("");
   const suggested = T.tasks.filter(t => t.status === "suggested");
   host.innerHTML = `
-    ${suggested.length ? `<h2 class="sec">Suggested by Steward <span class="count">${suggested.length}</span></h2>
+    ${suggested.length ? `<h2 class="sec">Suggested by Job Sourcer <span class="count">${suggested.length}</span></h2>
       <div class="card"><div class="meta">Recruiters asked you to do these. Add them to your list to track them (deadlines show under Upcoming).</div>
       ${suggested.map(t => taskRow(t, false)).join("")}</div>` : ""}
     <h2 class="sec">Add a task</h2>
@@ -720,10 +721,10 @@ async function renderTasks() {
       { key: "due", label: "Due", value: t => t.due_label, sortValue: t => (t.due_at ? Date.parse(t.due_at) : 8.64e15),
         render: t => t.due_label ? `<span class="${t.overdue ? "overdue" : t.due_soon ? "duesoon" : ""}">${esc(t.due_label)}</span>` : '<span class="muted">—</span>' },
       { key: "state", label: "Status", filter: "select" },
-      { key: "origin", label: "From", filter: "select", value: t => t.origin === "steward" ? "Steward" : "you" },
+      { key: "origin", label: "From", filter: "select", value: t => t.origin === "steward" ? "Job Sourcer" : "you" },
       { key: "link", label: "Link", sort: false, render: t => t.link ? `<a href="${esc(t.link)}" target="_blank" rel="noopener">open</a>` : "" },
     ],
-    empty: "No tasks yet. Steward suggests them when a recruiter asks you to do something; you can also add your own above.",
+    empty: "No tasks yet. Job Sourcer suggests them when a recruiter asks you to do something; you can also add your own above.",
     onRow: t => `<div class="form taskform" data-edit="${t.id}"><div class="grid2">
         <div class="field"><label>Task</label><input type="text" data-tf="title" value="${esc(t.title)}"></div>
         <div class="field"><label>Due (${esc(B.timezone)} time)</label><input type="datetime-local" data-tf="due_at" value="${toLocalInput(t.due_at)}"></div>
@@ -750,7 +751,7 @@ document.addEventListener("click", (e) => {
 async function renderHistory() {
   const rows = await api("/api/history");
   const host = $("#tab-history");
-  host.innerHTML = `<p class="meta">Every item Steward has handled: what you decided, what it did on its own, and how it turned out. Click a row for the message and what was sent.</p><div id="histTable"></div>`;
+  host.innerHTML = `<p class="meta">Every item Job Sourcer has handled: what you decided, what it did on its own, and how it turned out. Click a row for the message and what was sent.</p><div id="histTable"></div>`;
   dataTable($("#histTable"), {
     id: "history", rows, noun: "decisions", defaultSort: { key: "created", dir: "desc" },
     columns: [
@@ -802,7 +803,7 @@ async function renderRules() {
   const host = $("#tab-rules");
   host.innerHTML = `
     <h2 class="sec">The autonomy ladder</h2>
-    <p class="meta">Ask me → Act and tell me → Act silently. Every promotion is proposed by Steward and activated only by you. Overrides demote a rule immediately; rules unused for a long time go dormant.</p>
+    <p class="meta">Ask me → Act and tell me → Act silently. Every promotion is proposed by Job Sourcer and activated only by you. Overrides demote a rule immediately; rules unused for a long time go dormant.</p>
     <div id="rulesTable"></div>
     <h2 class="sec">Standing preferences</h2>
     <p class="meta">Constraints every draft follows (for example “Always add a 15-minute buffer before calls”).</p>
@@ -929,7 +930,7 @@ async function renderSetup() {
       <div class="meta">OAuth client file: <span class="mono">${esc(S.paths.google_credentials)}</span></div>
       <div class="buttons">${save(["calendar.backend", "scheduling.work_start", "scheduling.work_end", "scheduling.buffer_minutes"])}
       <button class="btn small" id="googleBtn">Connect Google Calendar</button> ${test("calendar")}</div>`)}
-    ${step(6, "linkedin", "LinkedIn (through your own browser)", `<div class="meta">Uses the linkedin-toolkit extension in your browser (Edge or Chrome), paired as in SETUP.md step 6. Steward keeps the toolkit's bridge running in the background; keep the browser with the extension open.</div>
+    ${step(6, "linkedin", "LinkedIn (through your own browser)", `<div class="meta">Uses the linkedin-toolkit extension in your browser (Edge or Chrome), paired as in SETUP.md step 6. Job Sourcer keeps the toolkit's bridge running in the background; keep the browser with the extension open.</div>
       ${secret("LINKEDIN_TOOLKIT_TOKEN")}
       <div class="meta">Get the token with: <span class="mono">npx -y -p linkedin-toolkit-mcp lit config get token --reveal</span></div>
       <div class="grid2">${field("linkedin.backend", "Backend", ["disabled", "upstream", "sandbox"])}</div>
@@ -937,9 +938,12 @@ async function renderSetup() {
     ${step(7, "notion", "Notion pipeline (optional)", `${secret("NOTION_TOKEN")}
       <div class="row"><input type="text" id="notionPage" placeholder="Link to a Notion page shared with your integration" style="flex:1"><button class="btn small" id="notionBtn">Create the pipeline database</button></div>
       <div class="buttons">${test("notion")}</div>`)}
-    ${step(8, "notifications", "Phone notifications (optional)", `<div class="grid2">${field("notifications.ntfy_url", "ntfy topic URL", "text", "e.g. https://ntfy.sh/your-long-random-topic")}${field("notifications.telegram_chat_id", "Telegram chat id")}${field("notifications.quiet_hours", "Quiet hours")}</div>
+    ${step(8, "notifications", "Notifications", `<label class="switch"><input type="checkbox" id="soundOn" ${v["notifications.sound"] ? "checked" : ""}> Play a sound on this computer when new events arrive (a recruiter message, call, invite, or meeting change)</label>
+      <div class="buttons"><button class="btn small" id="soundTest">Play test sound</button><span class="result" id="soundResult"></span></div>
+      <div class="meta">Phone notifications (optional):</div>
+      <div class="grid2">${field("notifications.ntfy_url", "ntfy topic URL", "text", "e.g. https://ntfy.sh/your-long-random-topic")}${field("notifications.telegram_chat_id", "Telegram chat id")}${field("notifications.quiet_hours", "Quiet hours")}</div>
       ${secret("TELEGRAM_BOT_TOKEN")}<div class="buttons"><button class="btn small primary" id="notifSave">Save</button></div>`)}
-    ${step(9, "autostart", "Start when you log in", `<label class="switch"><input type="checkbox" id="autoStart" ${S.autostart ? "checked" : ""} ${S.autostart_supported ? "" : "disabled"}> Start Steward automatically at Windows login (keeps watching even if this window is closed)</label>`)}
+    ${step(9, "autostart", "Start when you log in", `<label class="switch"><input type="checkbox" id="autoStart" ${S.autostart ? "checked" : ""} ${S.autostart_supported ? "" : "disabled"}> Start Job Sourcer automatically at Windows login (keeps watching even if this window is closed)</label>`)}
   `;
   host.querySelectorAll("[data-tz]").forEach(a => a.addEventListener("click", (e) => { e.preventDefault(); host.querySelector('[data-k="profile.timezone"]').value = a.dataset.tz; }));
   host.querySelectorAll("[data-save]").forEach(b => b.addEventListener("click", () => {
@@ -975,7 +979,14 @@ async function renderSetup() {
     const channels = [...(ntfy ? ["ntfy"] : []), ...(chat ? ["telegram"] : [])];
     act(() => api("/api/setup/config", "POST", { changes: { "notifications.ntfy_url": ntfy, "notifications.telegram_chat_id": chat, "notifications.channels": channels, "notifications.quiet_hours": host.querySelector('[data-k="notifications.quiet_hours"]').value } }), "Saved.").then(renderSetup);
   });
-  const as = $("#autoStart"); if (as) as.addEventListener("change", () => act(() => api("/api/setup/autostart", "POST", { enable: as.checked }), as.checked ? "Steward will start when you log in." : "Start-at-login removed.").then(renderSetup));
+  $("#soundOn").addEventListener("change", (e) => act(() => api("/api/setup/config", "POST", { changes: { "notifications.sound": e.target.checked } }),
+    e.target.checked ? "Sound on new events is on." : "Sound on new events is off.").then(renderSetup));
+  $("#soundTest").addEventListener("click", async () => {
+    const out = $("#soundResult");
+    try { const r = await api("/api/setup/sound-test", "POST", {}); out.className = "result " + (r.ok ? "ok" : "bad"); out.textContent = " " + r.detail; }
+    catch (e) { out.className = "result bad"; out.textContent = " " + e.message; }
+  });
+  const as = $("#autoStart"); if (as) as.addEventListener("change", () => act(() => api("/api/setup/autostart", "POST", { enable: as.checked }), as.checked ? "Job Sourcer will start when you log in." : "Start-at-login removed.").then(renderSetup));
 }
 
 // ---------- wiring ----------

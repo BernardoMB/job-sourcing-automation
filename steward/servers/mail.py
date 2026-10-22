@@ -2,7 +2,7 @@
 
 Works with any IMAP/SMTP provider (Gmail with an App Password, Outlook,
 Fastmail, ...). Reading uses BODY.PEEK so messages are never marked as read.
-`send_email` is a write tool: only Steward's executor calls it, and only for
+`send_email` is a write tool: only Job Sourcer's executor calls it, and only for
 actions you approved or that an earned rule allows.
 """
 
@@ -27,7 +27,7 @@ cfg = server_config()
 mail_cfg = cfg.mail
 mcp = make_server(
     "steward-mail",
-    "Read recruiter email over IMAP and send replies over SMTP. send_email is reserved for the Steward executor.",
+    "Read recruiter email over IMAP and send replies over SMTP. send_email is reserved for the Job Sourcer executor.",
 )
 
 
@@ -225,7 +225,7 @@ def backend() -> SandboxMail | ImapMail:
 @mcp.tool(annotations=READ_ONLY_REMOTE)
 @guarded
 def whoami() -> dict[str, Any]:
-    """The mailbox address Steward reads and sends from."""
+    """The mailbox address Job Sourcer reads and sends from."""
     return {"address": backend().address(), "backend": mail_cfg.backend, "folder": mail_cfg.folder}
 
 

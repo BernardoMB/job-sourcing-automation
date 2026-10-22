@@ -1,5 +1,5 @@
 @echo off
-REM Starts The Steward in the background (if it is not running) and opens its window.
+REM Starts Job Sourcer in the background (if it is not running) and opens its window.
 cd /d "%~dp0"
 if not exist "workspace\steward.yaml" (
   echo No workspace yet. See SETUP.md, step 1.

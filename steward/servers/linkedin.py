@@ -1,6 +1,6 @@
 """LinkedIn MCP server: reads and replies through YOUR logged-in browser session.
 
-Steward never scrapes LinkedIn and never runs a headless browser. In
+Job Sourcer never scrapes LinkedIn and never runs a headless browser. In
 `upstream` mode this server is a thin, rate-limited proxy in front of a LinkedIn
 MCP server that drives your own Chrome session (for example the open-source
 linkedin-toolkit Chrome extension + MCP server). Pacing is non-negotiable and
@@ -196,7 +196,7 @@ class UpstreamLinkedIn:
                                            headers={"Authorization": f"Bearer {token}"} if token else {})
             except httpx.HTTPError as exc:
                 raise RuntimeError(f"The LinkedIn toolkit bridge at {self.spec.url} is not reachable ({exc}). "
-                                   "Steward starts it automatically; see data/logs/linkedin-bridge.log.") from exc
+                                   "Job Sourcer starts it automatically; see data/logs/linkedin-bridge.log.") from exc
             if pre.status_code in (401, 403):
                 raise RuntimeError("The LinkedIn toolkit bridge refused the pairing token (HTTP "
                                    f"{pre.status_code}). Paste the current token in Setup (step 6).")
@@ -207,7 +207,7 @@ class UpstreamLinkedIn:
                         yield streams[0], streams[1]
             except OSError as exc:
                 raise RuntimeError(f"The LinkedIn toolkit bridge at {self.spec.url} is not reachable ({exc}). "
-                                   "Steward starts it automatically; see data/logs/linkedin-bridge.log.") from exc
+                                   "Job Sourcer starts it automatically; see data/logs/linkedin-bridge.log.") from exc
             return
         from mcp import StdioServerParameters
         from mcp.client.stdio import get_default_environment, stdio_client
@@ -405,7 +405,7 @@ async def pacing_status() -> dict[str, Any]:
 @mcp.tool(annotations=READ_ONLY_REMOTE)
 @guarded
 async def upstream_tools(refresh: bool = False) -> dict[str, Any]:
-    """The upstream LinkedIn server's tools and which one Steward uses for each operation."""
+    """The upstream LinkedIn server's tools and which one Job Sourcer uses for each operation."""
     b = backend()
     if not isinstance(b, UpstreamLinkedIn):
         return {"backend": li_cfg.backend, "tools": [], "mapping": {}}

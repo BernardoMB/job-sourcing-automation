@@ -118,7 +118,7 @@ def notion_status() -> dict[str, Any]:
 
 @mcp.tool(annotations=WRITE)
 @guarded
-def create_database(parent_page_id: str, title: str = "Job Pipeline (Steward)") -> dict[str, Any]:
+def create_database(parent_page_id: str, title: str = "Job Pipeline (Job Sourcer)") -> dict[str, Any]:
     """Create the pipeline database under a Notion page shared with the integration."""
     body = {
         "parent": {"type": "page_id", "page_id": parent_page_id},

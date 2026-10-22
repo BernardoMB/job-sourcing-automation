@@ -3,7 +3,7 @@
 Every decision you make, every action taken on your behalf, every rule change,
 and every override is appended here with full context. The learning engine only
 reads from it. `verify()` recomputes the chain, so any edit or deletion made
-outside Steward (the table also has triggers that block UPDATE and DELETE) is
+outside Job Sourcer (the table also has triggers that block UPDATE and DELETE) is
 detected.
 """
 
@@ -19,14 +19,14 @@ GENESIS = "0" * 64
 
 KINDS = {
     "decision",          # you approved / edited / rejected a draft
-    "auto_execution",    # Steward acted on its own under an earned rule
+    "auto_execution",    # Job Sourcer acted on its own under an earned rule
     "execution",         # outcome of one executed action
     "override",          # you flagged an automatic action as wrong
     "rule_change",       # a rule was created, promoted, demoted, retired, graduated
     "preference_change", # a preference was created or retired
     "proposal",          # you accepted or dismissed a suggested automation
     "task",              # a task was suggested, accepted, added, completed, or dismissed
-    "instruction",       # you told Steward what to do instead of its draft
+    "instruction",       # you told Job Sourcer what to do instead of its draft
 }
 
 

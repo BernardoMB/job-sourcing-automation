@@ -1,4 +1,4 @@
-"""Attention budgeting: Steward pings you only when it is worth your attention.
+"""Attention budgeting: Job Sourcer pings you only when it is worth your attention.
 
 Rules: a digest when at least `min_pending` decisions are waiting or anything
 high-priority arrived, never during quiet hours, at most once per cooldown; plus
@@ -132,7 +132,7 @@ async def maybe_notify(cfg: Config, db: Database, hub: MCPHub) -> list[str]:
         body = (f"{len(pending)} decision(s) waiting ({high} high priority). "
                 f"{auto} handled automatically since your last check.\n"
                 f"Open http://{cfg.dashboard.host}:{cfg.dashboard.port} or run `steward brief`.")
-        send(cfg, db, "digest", "The Steward: your briefing is ready", body, urgent=high > 0)
+        send(cfg, db, "digest", "Job Sourcer: your briefing is ready", body, urgent=high > 0)
         db.kv_set("last_digest_at", now_iso())
         db.kv_set("last_digest_pending", len(pending))
         sent.append("digest")

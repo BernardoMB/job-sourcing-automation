@@ -149,7 +149,7 @@ class Learner:
             self._propose(
                 "new_rule",
                 f"Handle '{label}' messages{tech_txt} for you?",
-                f"You approved {len(streak)} drafts of this kind in a row without edits. Steward would act and tell "
+                f"You approved {len(streak)} drafts of this kind in a row without edits. Job Sourcer would act and tell "
                 f"you (\"{TIER_LABELS['auto_approve']}\"), after a shadow period of "
                 f"{self.auto.shadow_matches_required} matching decisions. Rule: {describe(condition)}.",
                 {"condition": condition, "tier": "auto_approve", "min_confidence": self.auto.default_rule_min_confidence,

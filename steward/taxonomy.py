@@ -19,7 +19,7 @@ CATEGORIES: dict[str, str] = {
     "negotiation": "Negotiates terms (compensation, equity, start date, title)",
     "references_background": "Requests references, background checks, or personal documents",
     "rejection": "Declines the candidate or closes the position",
-    "follow_up": "Steward-initiated follow-up on a stalled thread",
+    "follow_up": "Job Sourcer-initiated follow-up on a stalled thread",
     "call_notification": "A missed call or voicemail notification (e.g. Google Voice, carrier voicemail-to-email)",
     "meeting_change": "A job-search meeting was moved, cancelled, or declined",
     "other": "Recruiter-related but none of the above",

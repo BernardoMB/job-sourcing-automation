@@ -21,7 +21,7 @@ UPSTREAM_RULES: dict[str, tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...
 # thread or sending a message does. (This is what tells "get_conversations" from "get_messages".)
 NEEDS_ARGUMENTS = {"list_conversations": False, "get_conversation": True, "send_message": True}
 
-# Steward's argument -> (exact names an upstream tool might use, root words to look for otherwise).
+# Job Sourcer's argument -> (exact names an upstream tool might use, root words to look for otherwise).
 ARG_SYNONYMS = {
     "conversation_id": (("conversation_id", "conversationId", "thread_id", "threadId", "conversationUrn", "chat_id",
                          "id", "urn"), ("conversation", "thread", "chat")),
@@ -34,7 +34,7 @@ ARG_SYNONYMS = {
 
 
 def _required(spec: Any) -> list[str] | None:
-    """The tool's required arguments, or None when Steward doesn't know its schema."""
+    """The tool's required arguments, or None when Job Sourcer doesn't know its schema."""
     schema = spec.get("schema") if isinstance(spec, dict) else None
     if not isinstance(schema, dict) or not schema:
         return None
@@ -60,7 +60,7 @@ def pick_upstream_tool(logical: str, tools: dict[str, Any], configured: dict[str
 
 
 def adapt_args(schema: dict[str, Any] | None, wanted: dict[str, Any]) -> dict[str, Any]:
-    """Rename Steward's arguments to whatever the upstream tool's input schema calls them."""
+    """Rename Job Sourcer's arguments to whatever the upstream tool's input schema calls them."""
     props = list(((schema or {}).get("properties") or {}).keys())
     if not props:
         return wanted

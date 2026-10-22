@@ -1,6 +1,6 @@
 """Your to-do list: things only you can do (assessments, forms, documents, applications).
 
-Steward suggests a task whenever a message asks you to do something yourself;
+Job Sourcer suggests a task whenever a message asks you to do something yourself;
 you accept or dismiss it. You can also add tasks by hand and tick them off.
 Tasks with a deadline appear under "Upcoming meetings & deadlines" and get
 reminders. Every change is written to the ledger.

@@ -48,7 +48,7 @@ def _digits(phone: str) -> str:
 def find_for_call(db: Database, cls: dict[str, Any]) -> dict[str, Any] | None:
     """Match a missed call / voicemail to an opportunity: by phone number, then company, then caller name.
 
-    A call from a recruiter Steward has never seen becomes a new lead when the company is known.
+    A call from a recruiter Job Sourcer has never seen becomes a new lead when the company is known.
     """
     number = _digits(cls.get("phone_number", ""))
     if number:
@@ -135,7 +135,7 @@ def record_outbound(db: Database, opp_id: int | None, next_action: str = "") -> 
 
 
 async def notion_pull(hub: MCPHub, db: Database, opp: dict[str, Any]) -> dict[str, Any]:
-    """Read the row from Notion. A stage you changed in Notion wins over Steward's cache."""
+    """Read the row from Notion. A stage you changed in Notion wins over Job Sourcer's cache."""
     if not hub.enabled("notion"):
         return opp
     res = await hub.call("notion", "query_opportunities", {"steward_id": opp["id"]})

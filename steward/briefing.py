@@ -88,7 +88,7 @@ def draft_view(cfg: Config, db: Database, d: dict[str, Any]) -> dict[str, Any]:
         "instruction": analysis.get("instruction", ""),
         "dont_ask": {
             "allowed": not blocked,
-            "blocked_reason": ("Steward always asks you about " + ", ".join(b.replace("_", " ") for b in blocked))
+            "blocked_reason": ("Job Sourcer always asks you about " + ", ".join(b.replace("_", " ") for b in blocked))
             if blocked else "",
             "categories": [c for c in cls.get("categories", []) if c != "not_recruiter"],
             "technologies": cls.get("technologies", []),

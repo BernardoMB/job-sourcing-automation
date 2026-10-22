@@ -33,7 +33,7 @@ EDITABLE_PREFIXES = ("profile.", "mail.", "calendar.", "scheduling.", "linkedin.
                      "linkedin.daily_cap", "linkedin.business_hours", "notion.", "notifications.",
                      "autonomy.execute_on_approve", "autonomy.follow_up_after_days", "llm.provider", "llm.model",
                      "llm.claude_code_model")
-STARTUP_NAME = "The Steward.cmd"
+STARTUP_NAME = "Job Sourcer.cmd"
 
 
 # -- config and secrets ----------------------------------------------------------
@@ -50,7 +50,7 @@ def update_config(cfg: Config, changes: dict[str, Any]) -> Config:
         node[keys[-1]] = value
     new = Config.model_validate(raw)  # raises on invalid values; nothing is written
     new.config_path = cfg.config_path
-    header = "# The Steward configuration. See README.md and SETUP.md for every option.\n"
+    header = "# Job Sourcer configuration. See README.md and SETUP.md for every option.\n"
     path.write_text(header + dump_config(new), encoding="utf-8")
     return load_config(path)
 
@@ -61,7 +61,7 @@ def env_file(cfg: Config) -> Path:
 
 def set_secret(cfg: Config, name: str, value: str) -> None:
     if name not in SECRETS and name != cfg.mail.password_env and name != cfg.notion.token_env:
-        raise ValueError(f"{name} is not a secret Steward manages")
+        raise ValueError(f"{name} is not a secret Job Sourcer manages")
     value = value.strip()
     if "\n" in value or "\r" in value:
         raise ValueError("Secrets must be a single line")
@@ -102,7 +102,11 @@ def startup_file() -> Path | None:
     appdata = os.environ.get("APPDATA")
     if sys.platform != "win32" or not appdata:
         return None
-    return Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / STARTUP_NAME
+    folder = Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+    old = folder / "The Steward.cmd"  # the entry's name before the app was renamed
+    if old.exists() and not (folder / STARTUP_NAME).exists():
+        old.rename(folder / STARTUP_NAME)
+    return folder / STARTUP_NAME
 
 
 def set_autostart(cfg: Config, enable: bool) -> bool:
@@ -206,7 +210,7 @@ def checks(cfg: Config) -> list[dict[str, Any]]:
         token_ok = not li.upstream.token_env or bool(os.environ.get(li.upstream.token_env))
         bridge = bridge_status(cfg)
         problems = [p for p, bad in (("pairing token not saved", not token_ok),
-                                     ("bridge not running yet (Steward starts it on its next check)",
+                                     ("bridge not running yet (Job Sourcer starts it on its next check)",
                                       bridge.get("local") and not bridge.get("running"))) if bad]
         out.append(_step("linkedin", "LinkedIn", "todo" if not token_ok else ("warn" if problems else "ok"),
                          f"linkedin-toolkit bridge at {li.upstream.url}" + (" · " + "; ".join(problems) if problems else
@@ -235,13 +239,14 @@ def checks(cfg: Config) -> list[dict[str, Any]]:
                          "Turn it on below if you want the pipeline mirrored to Notion."))
 
     nt = cfg.notifications
-    out.append(_step("notifications", "Phone notifications", "ok" if nt.channels else "off",
-                     ", ".join(nt.channels) or "Optional. The dashboard and desktop alerts always work.",
+    alerts = (["sound on new events"] if nt.sound else []) + nt.channels
+    out.append(_step("notifications", "Notifications", "ok" if alerts else "off",
+                     ", ".join(alerts) or "Optional. The dashboard and desktop alerts always work.",
                      "Add an ntfy topic URL or a Telegram bot to get briefings on your phone."))
     sf = startup_file()
     out.append(_step("autostart", "Start when you log in", "ok" if sf and sf.exists() else "off",
-                     "enabled" if sf and sf.exists() else "Steward runs only while you start it",
-                     "Turn on start-at-login so Steward keeps watching without you opening anything."))
+                     "enabled" if sf and sf.exists() else "Job Sourcer runs only while you start it",
+                     "Turn on start-at-login so Job Sourcer keeps watching without you opening anything."))
     return out
 
 
@@ -267,6 +272,7 @@ def editable_values(cfg: Config) -> dict[str, Any]:
         "notifications.channels": cfg.notifications.channels, "notifications.ntfy_url": cfg.notifications.ntfy_url,
         "notifications.telegram_chat_id": cfg.notifications.telegram_chat_id,
         "notifications.quiet_hours": cfg.notifications.quiet_hours,
+        "notifications.sound": cfg.notifications.sound,
         "autonomy.execute_on_approve": cfg.autonomy.execute_on_approve,
     }
 

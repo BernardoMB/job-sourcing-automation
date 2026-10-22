@@ -24,7 +24,7 @@ from steward.ledger import Ledger
 from steward.taxonomy import STAGES, TIER_LABELS
 
 app = typer.Typer(add_completion=False, no_args_is_help=True, rich_markup_mode="rich",
-                  help="The Steward: your recruiter-facing chief of staff.")
+                  help="Job Sourcer: your recruiter-facing chief of staff.")
 console = Console(highlight=False)
 STATE: dict[str, Any] = {"config": None}
 
@@ -98,7 +98,7 @@ def doctor() -> None:
     from steward.mcp_hub import MCPHub
 
     c = cfg()
-    table = Table(title="Steward doctor", show_lines=False)
+    table = Table(title="Job Sourcer doctor", show_lines=False)
     table.add_column("Check")
     table.add_column("Result")
 
@@ -199,7 +199,7 @@ def run(once: bool = typer.Option(False, "--once", help="Run a single cycle and 
         summary = asyncio.run(s.cycle(force=True))
         _print_cycle(summary)
         return
-    console.print(f"[bold]The Steward is on duty.[/bold] Checking every {tick}s (Ctrl+C to stop).")
+    console.print(f"[bold]Job Sourcer is on duty.[/bold] Checking every {tick}s (Ctrl+C to stop).")
     try:
         asyncio.run(s.run_forever(tick))
     except KeyboardInterrupt:
@@ -366,7 +366,7 @@ def approve(draft_id: int, note: str = typer.Option("", help="Optional note for 
 
 
 @app.command()
-def reject(draft_id: int, note: str = typer.Option("", help="Why (teaches Steward)")) -> None:
+def reject(draft_id: int, note: str = typer.Option("", help="Why (teaches Job Sourcer)")) -> None:
     """Reject a draft: nothing is sent."""
     _, db, _ = _db_ledger()
     try:
@@ -432,7 +432,7 @@ def dont_ask(draft_id: int,
 @app.command()
 def override(draft_id: int, note: str = typer.Option(..., help="What was wrong"),
              corrected: str = typer.Option("", help="What you would have sent instead")) -> None:
-    """Flag something Steward did on its own as wrong. Its rule is demoted immediately."""
+    """Flag something Job Sourcer did on its own as wrong. Its rule is demoted immediately."""
     c, db, ledger = _db_ledger()
     try:
         res = decisions.override(c, db, ledger, draft_id, note, corrected)
@@ -586,7 +586,7 @@ def tasks(add: str = typer.Option("", "--add", help="Add a task with this title"
           link: str = typer.Option("", help="Link for --add"),
           done: Optional[int] = typer.Option(None, "--done", help="Mark a task done"),
           reopen: Optional[int] = typer.Option(None, "--reopen", help="Reopen a task"),
-          accept: Optional[int] = typer.Option(None, "--accept", help="Accept a task Steward suggested"),
+          accept: Optional[int] = typer.Option(None, "--accept", help="Accept a task Job Sourcer suggested"),
           dismiss: Optional[int] = typer.Option(None, "--dismiss", help="Dismiss a task"),
           search: str = typer.Option("", help="Only tasks containing this text")) -> None:
     """Your to-do list: assessments, forms, documents, applications."""
@@ -614,8 +614,8 @@ def tasks(add: str = typer.Option("", "--add", help="Add a task with this title"
 
 
 @app.command()
-def instruct(draft_id: int, instruction: str = typer.Argument(..., help="What Steward should do instead")) -> None:
-    """Tell Steward what to do instead of its draft; it rewrites the reply and actions for your approval."""
+def instruct(draft_id: int, instruction: str = typer.Argument(..., help="What Job Sourcer should do instead")) -> None:
+    """Tell Job Sourcer what to do instead of its draft; it rewrites the reply and actions for your approval."""
     s = steward_obj()
     try:
         res = asyncio.run(s.revise(draft_id, instruction=instruction))
@@ -628,7 +628,7 @@ def instruct(draft_id: int, instruction: str = typer.Argument(..., help="What St
 
 
 @app.command()
-def teach(draft_id: int, rule: str = typer.Argument(..., help="How Steward should respond next time"),
+def teach(draft_id: int, rule: str = typer.Argument(..., help="How Job Sourcer should respond next time"),
           scope: str = typer.Option("kind", help="kind (messages like this), company, sender, or all"),
           redraft: bool = typer.Option(False, "--redraft", help="Also re-draft this item with the rule")) -> None:
     """Save a rule from a briefing item that shapes future replies."""
@@ -719,12 +719,12 @@ def serve(watch: bool = typer.Option(True, "--watch/--no-watch", help="Also run 
     c = cfg()
     application = create_app(c, watch=watch, tick=tick)
     p = port or c.dashboard.port
-    console.print(f"[bold]The Steward[/bold] dashboard: http://{c.dashboard.host}:{p}")
+    console.print(f"[bold]Job Sourcer[/bold] dashboard: http://{c.dashboard.host}:{p}")
     uvicorn.run(application, host=c.dashboard.host, port=p, log_level="warning")
 
 
 def _running(url: str, config_path: str = "") -> str:
-    """'' if nothing answers, 'same' if this workspace's Steward answers, 'other' for another workspace."""
+    """'' if nothing answers, 'same' if this workspace's Job Sourcer answers, 'other' for another workspace."""
     import httpx
 
     try:
@@ -758,8 +758,8 @@ def _open_window(url: str) -> None:
 
 
 @app.command("app")
-def app_window(no_window: bool = typer.Option(False, "--no-window", help="Only make sure Steward is running")) -> None:
-    """Start Steward in the background (if needed) and open the dashboard window. No terminal to keep open."""
+def app_window(no_window: bool = typer.Option(False, "--no-window", help="Only make sure Job Sourcer is running")) -> None:
+    """Start Job Sourcer in the background (if needed) and open the dashboard window. No terminal to keep open."""
     import subprocess
     import time
 
@@ -767,7 +767,7 @@ def app_window(no_window: bool = typer.Option(False, "--no-window", help="Only m
     url = f"http://{c.dashboard.host}:{c.dashboard.port}"
     state = _running(url, c.config_path)
     if state == "other":
-        fail(f"Port {c.dashboard.port} is used by something else (maybe another Steward workspace). "
+        fail(f"Port {c.dashboard.port} is used by something else (maybe another Job Sourcer workspace). "
              "Close it, or set dashboard.port in steward.yaml.")
     if not state:
         log_dir = c.data_path / "logs"
@@ -783,22 +783,22 @@ def app_window(no_window: bool = typer.Option(False, "--no-window", help="Only m
                 break
             time.sleep(0.5)
         else:
-            fail(f"Steward did not start; see {log_dir / 'server.log'}")
+            fail(f"Job Sourcer did not start; see {log_dir / 'server.log'}")
     if not no_window:
         _open_window(url)
-    console.print(f"The Steward is running at {url}")
+    console.print(f"Job Sourcer is running at {url}")
 
 
 @app.command()
 def autostart(enable: bool = typer.Option(True, "--enable/--disable")) -> None:
-    """Start Steward automatically when you log in to Windows."""
+    """Start Job Sourcer automatically when you log in to Windows."""
     from steward.setup import set_autostart
 
     try:
         on = set_autostart(cfg(), enable)
     except RuntimeError as exc:
         fail(str(exc))
-    console.print("Steward will start when you log in." if on else "Start-at-login removed.")
+    console.print("Job Sourcer will start when you log in." if on else "Start-at-login removed.")
 
 
 # -- sandbox helpers ------------------------------------------------------------------

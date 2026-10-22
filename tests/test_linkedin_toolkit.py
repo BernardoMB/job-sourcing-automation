@@ -72,7 +72,7 @@ def test_steward_runs_the_bridge_and_talks_to_it_over_http(workspace, tmp_path, 
         summary = run(s.cycle(force=True))
         assert "linkedin" not in summary["ingested"]
         assert any("pairing token" in e for e in summary["errors"]), summary["errors"]
-        assert linkedin_bridge.status(s.cfg)["running"]  # Steward started the bridge itself
+        assert linkedin_bridge.status(s.cfg)["running"]  # Job Sourcer started the bridge itself
 
         # With the token: threads are read over HTTP and the reply goes to the person's publicId.
         monkeypatch.setenv("LINKEDIN_TOOLKIT_TOKEN", "pair-123")

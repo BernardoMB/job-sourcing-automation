@@ -2,7 +2,7 @@
 
 The toolkit's browser extension (Edge or Chrome) connects to a long-running local bridge;
 a toolkit process started per check would be gone before the extension reconnects. So
-Steward starts the bridge once, restarts it if it stops, and talks to it over HTTP on
+Job Sourcer starts the bridge once, restarts it if it stops, and talks to it over HTTP on
 127.0.0.1. Nothing here reads the toolkit's files or its pairing token.
 """
 
@@ -29,7 +29,7 @@ def _endpoint(cfg: Config) -> tuple[str, int] | None:
         return None
     u = urlparse(li.upstream.url)
     if u.hostname not in ("127.0.0.1", "localhost", "::1"):
-        return None  # a bridge on another machine is not Steward's to run
+        return None  # a bridge on another machine is not Job Sourcer's to run
     return u.hostname, u.port or 80
 
 

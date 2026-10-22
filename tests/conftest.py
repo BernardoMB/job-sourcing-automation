@@ -12,6 +12,14 @@ from steward.orchestrator import Steward
 from steward.workspace import init_workspace
 
 
+@pytest.fixture(autouse=True)
+def chimes(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
+    """Tests never play sound: record each chime instead."""
+    played: list[Path] = []
+    monkeypatch.setattr("steward.sound.play", lambda path, wait=0.0: played.append(path) or True)
+    return played
+
+
 @pytest.fixture()
 def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)

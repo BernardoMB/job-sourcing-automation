@@ -210,7 +210,7 @@ def dont_ask_again(cfg: Config, db: Database, ledger: Ledger, draft_id: int, *, 
     blocked = sorted(set(cats) & (set(cfg.autonomy.hard_escalate_categories) | {"offer", "negotiation"}))
     if blocked:
         raise DecisionError(
-            "Steward always asks you about " + ", ".join(b.replace("_", " ") for b in blocked)
+            "Job Sourcer always asks you about " + ", ".join(b.replace("_", " ") for b in blocked)
             + ". Remove it from autonomy.hard_escalate_categories in steward.yaml if you really want to delegate it.")
     condition = make_condition(cats, technologies if technologies is not None else [], channels, sender, company,
                                require_cv_evidence=True)
@@ -233,7 +233,7 @@ def override(cfg: Config, db: Database, ledger: Ledger, draft_id: int, note: str
     """Flag an automatic action as wrong. The rule that allowed it is demoted one tier immediately."""
     draft = db.get_draft(draft_id)
     if draft is None or draft["route"] == "ask":
-        raise DecisionError("Only actions Steward took on its own can be overridden")
+        raise DecisionError("Only actions Job Sourcer took on its own can be overridden")
     payload = ledger_payload(db, draft, "override", loads(draft["actions_json"], []), note)
     payload["corrected_reply"] = corrected_reply
     ledger.append("override", payload, event_id=draft["event_id"], draft_id=draft_id, rule_id=draft["matched_rule_id"])
@@ -363,9 +363,9 @@ def teach_rule(db: Database, ledger: Ledger, draft_id: int, text: str, scope: st
     company = (opp.get("company") or cls.get("company") or "") if scope == "company" else ""
     sender = (event.get("sender_address") or "") if scope == "sender" else ""
     if scope == "company" and not company:
-        raise DecisionError("Steward doesn't know this item's company; choose another scope")
+        raise DecisionError("Job Sourcer doesn't know this item's company; choose another scope")
     if scope == "sender" and not sender:
-        raise DecisionError("Steward doesn't know who sent this item; choose another scope")
+        raise DecisionError("Job Sourcer doesn't know who sent this item; choose another scope")
     pref_id = add_preference(db, ledger, text, categories, company, sender, draft_id=draft_id)
     where = {"kind": " / ".join(c.replace("_", " ") for c in categories) or "messages like this one",
              "company": company, "sender": sender, "all": "every message"}[scope]

@@ -1,17 +1,17 @@
 """Claude through your Claude Pro/Max subscription, by running the official Claude Code program.
 
-Steward never reads, stores, or forwards your Claude login. It runs the
+Job Sourcer never reads, stores, or forwards your Claude login. It runs the
 unmodified `claude` program in non-interactive mode (`claude -p`), exactly as
 you could from a terminal, so the usage counts against your own plan. Each call:
 
-- replaces Claude Code's system prompt with Steward's (`--system-prompt`),
+- replaces Claude Code's system prompt with Job Sourcer's (`--system-prompt`),
 - has no tools at all (`--tools ""`), so a recruiter's message can't make it act,
 - loads none of your Claude Code settings, hooks, plugins, or MCP servers,
 - saves no session history (`--no-session-persistence`),
-- returns JSON validated against Steward's schema (`--json-schema`).
+- returns JSON validated against Job Sourcer's schema (`--json-schema`).
 
 When your plan's usage limit is reached, calls raise `LLMUnavailable` with the
-reset time; Steward keeps new messages queued and resumes after the reset.
+reset time; Job Sourcer keeps new messages queued and resumes after the reset.
 """
 
 from __future__ import annotations

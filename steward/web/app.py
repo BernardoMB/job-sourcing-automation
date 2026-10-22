@@ -23,12 +23,14 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 
+from steward import ASSETS
 from steward import briefing as briefing_mod
 from steward import decisions
 from steward import linkedin_bridge
 from steward import setup as setup_mod
+from steward import sound
 from steward import tasks as tasks_mod
 from steward.llm import LLMError
 from steward.config import Config
@@ -101,7 +103,7 @@ def create_app(cfg: Config, watch: bool = True, tick: int | None = None) -> Fast
         if task:
             task.cancel()
 
-    app = FastAPI(title="The Steward", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+    app = FastAPI(title="Job Sourcer", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
 
     @app.middleware("http")
     async def guard(request: Request, call_next):
@@ -146,6 +148,12 @@ def create_app(cfg: Config, watch: bool = True, tick: int | None = None) -> Fast
         html = (STATIC / "index.html").read_text(encoding="utf-8")
         return html.replace("__STEWARD_TOKEN__", token)
 
+    # The page's icon, which is also what Edge/Chrome show in the taskbar for the app window.
+    @app.get("/app-logo.png")
+    @app.get("/favicon.ico")
+    async def logo() -> FileResponse:
+        return FileResponse(ASSETS / "app-logo.png", media_type="image/png")
+
     @app.get("/api/stream")
     async def stream(request: Request) -> StreamingResponse:
         async def events():
@@ -186,7 +194,7 @@ def create_app(cfg: Config, watch: bool = True, tick: int | None = None) -> Fast
                        "queued": "approved, queued", "executing": "running", "executed": "done",
                        "deferred": "waiting (LinkedIn pacing)", "failed": "failed", "dismissed": "rejected",
                        "superseded": "replaced by a newer draft"}.get(d["status"], d["status"])
-            who = "Steward (rule)" if d["route"] != "ask" and d["status"] in ("executed", "queued", "executing") else \
+            who = "Job Sourcer (rule)" if d["route"] != "ask" and d["status"] in ("executed", "queued", "executing") else \
                 ("you" if d["decided_at"] else "")
             out.append({
                 "id": d["id"], "summary": d["summary"], "channel": d["channel"], "status": d["status"],
@@ -250,7 +258,7 @@ def create_app(cfg: Config, watch: bool = True, tick: int | None = None) -> Fast
     async def instruct(draft_id: int, body: dict[str, Any]) -> dict[str, Any]:
         text = (body.get("instruction") or "").strip()
         if not text:
-            raise HTTPException(400, "Write what Steward should do instead")
+            raise HTTPException(400, "Write what Job Sourcer should do instead")
         try:
             async with lock:
                 res = await steward.revise(draft_id, instruction=text)
@@ -431,6 +439,13 @@ def create_app(cfg: Config, watch: bool = True, tick: int | None = None) -> Fast
             raise bad(exc)
         reload(C())
         return {"ok": True}
+
+    @app.post("/api/setup/sound-test")
+    async def setup_sound_test() -> dict[str, Any]:
+        path = sound.chime_file(C())
+        if await asyncio.to_thread(sound.play, path, 3.0):
+            return {"ok": True, "detail": f"Playing {path.name}"}
+        return {"ok": False, "detail": f"Could not play {path} (the file is missing, or this is not Windows)"}
 
     @app.post("/api/setup/probe/{name}")
     async def setup_probe(name: str) -> dict[str, Any]:

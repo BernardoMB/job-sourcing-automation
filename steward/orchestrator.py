@@ -16,7 +16,7 @@ import re
 from datetime import timedelta
 from typing import Any
 
-from steward import decisions, linkedin_bridge, notify, pipeline, priority
+from steward import decisions, linkedin_bridge, notify, pipeline, priority, sound
 from steward import tasks as tasks_mod
 from steward.agents import classifier, cv_analyst, drafter, fewshot, instructor, scheduler
 from steward.agents.base import AgentContext
@@ -69,6 +69,7 @@ class Steward:
         bridge = await asyncio.to_thread(linkedin_bridge.ensure_running, self.cfg)
         if bridge.get("note"):
             summary["errors"].append(f"linkedin bridge: {bridge['note']}")
+        last_event = self.db.scalar("SELECT COALESCE(MAX(id), 0) FROM events") or 0
         async with MCPHub(self.cfg) as hub:
             for source, fn, minutes in (
                 ("email", self.ingest_email, self.cfg.mail.poll_minutes),
@@ -85,6 +86,11 @@ class Steward:
                 except (MCPToolError, OSError) as exc:
                     summary["errors"].append(f"{source}: {exc}")
                     log.warning("ingest %s failed: %s", source, exc)
+            # Chime now, before the slow drafting: filtered-out mail and our own follow-ups don't count.
+            summary["new_events"] = self.db.scalar(
+                "SELECT COUNT(*) FROM events WHERE id > ? AND source != 'steward' AND status != 'ignored'",
+                (last_event,)) or 0
+            sound.new_events(self.cfg, summary["new_events"])
             summary["ingested"]["follow_ups"] = self.detect_follow_ups()
             try:
                 summary["reprioritized"] = await self.reprioritize(hub)
@@ -157,7 +163,7 @@ class Steward:
         async with MCPHub(self.cfg) as hub:
             ctx = self.ctx(hub)
             cls = analysis.get("classification") or {}
-            if "questions" not in cls:  # an item Steward could not triage before
+            if "questions" not in cls:  # an item Job Sourcer could not triage before
                 cls = await classifier.classify(ctx, event, self.thread_history(event))
             evidence = analysis.get("evidence") or await cv_analyst.analyze(ctx, cls)
             sched = analysis.get("schedule") or {"kind": "none", "checks": [], "slots": [], "booking": None,
@@ -267,7 +273,7 @@ class Steward:
         booking = None
         if event.get("sender_address") and "@" in event.get("sender_address", ""):
             booking = {"title": scheduler.meeting_title(ctx, cls, event), "start": start, "end": end,
-                       "attendees": [event["sender_address"]], "description": "Scheduled by The Steward.",
+                       "attendees": [event["sender_address"]], "description": "Scheduled by Job Sourcer.",
                        "add_video_link": sch.add_video_link, "location": ""}
         return {**empty, "kind": "accept_proposed", "accepted_label": label, "booking": booking,
                 "checks": [{"start": start, "end": end, "label": label, "free": True, "ok": True, "problems": []}]}
@@ -543,13 +549,13 @@ class Steward:
         return processed, auto
 
     def _escalate_unprocessed(self, event: dict[str, Any], reason: str) -> None:
-        """If Steward cannot reason about a message, it hands it to you rather than guessing."""
+        """If Job Sourcer cannot reason about a message, it hands it to you rather than guessing."""
         self.db.insert("drafts", {
             "event_id": event["id"], "channel": event["source"], "summary": event.get("subject") or "Message",
             "actions_json": "[]", "analysis_json": dumps({"classification": {"categories": ["other"]}}),
             "confidence": 0.0, "job_advancement": 0.0, "routing_band": "LOW", "risk_level": "high",
             "priority": "high", "route": "ask",
-            "route_reasons_json": dumps([f"Steward could not process this message: {reason}"]),
+            "route_reasons_json": dumps([f"Job Sourcer could not process this message: {reason}"]),
             "status": "pending", "created_at": now_iso(),
         })
 
@@ -573,7 +579,7 @@ class Steward:
 
     @staticmethod
     def _fixed_classification(category: str, summary: str, event: dict[str, Any], needs_reply: bool) -> dict[str, Any]:
-        """Events Steward generated itself need no LLM triage."""
+        """Events Job Sourcer generated itself need no LLM triage."""
         return {"is_recruiter_related": True, "needs_reply": needs_reply, "summary": summary,
                 "company": "", "role": "", "recruiter_name": event.get("sender_name", ""), "phone_number": "",
                 "location": "", "categories": [category], "primary_category": category, "questions": [],
@@ -752,7 +758,7 @@ class Steward:
         return actions
 
     def _call_back_item(self, event: dict[str, Any], cls: dict[str, Any], opp: dict[str, Any] | None) -> None:
-        """A recruiter called and Steward has no thread to answer in: put it at the top for you."""
+        """A recruiter called and Job Sourcer has no thread to answer in: put it at the top for you."""
         number = cls.get("phone_number") or "the number in the notification"
         who = cls.get("recruiter_name") or "A recruiter"
         self.db.insert("drafts", {
@@ -762,7 +768,7 @@ class Steward:
             "confidence": 0.0, "job_advancement": 0.0, "routing_band": "LOW", "risk_level": cls.get("risk_level", "medium"),
             "priority": "high", "route": "ask", "status": "pending", "created_at": now_iso(),
             "route_reasons_json": dumps([f"They called you. Call back {number}: no email or LinkedIn thread is known "
-                                         "for them yet, so Steward cannot reply in writing."]),
+                                         "for them yet, so Job Sourcer cannot reply in writing."]),
         })
         self.db.update("events", event["id"], {"status": "processed", "processed_at": now_iso()})
 

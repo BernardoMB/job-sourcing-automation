@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "steward"
 version = "0.1.0"
-description = "The Steward: a local, self-hosted, human-in-the-loop harness that runs your recruiter-facing job search."
+description = "Job Sourcer: a local, self-hosted, human-in-the-loop harness that runs your recruiter-facing job search."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

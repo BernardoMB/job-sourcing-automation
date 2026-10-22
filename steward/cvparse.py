@@ -2,7 +2,7 @@
 
 Nothing here generates text: every answer is a pointer to lines that exist in
 the CV, plus arithmetic over the role dates found there. If the CV does not
-contain the evidence, the answer is "not found", and Steward escalates to you.
+contain the evidence, the answer is "not found", and Job Sourcer escalates to you.
 """
 
 from __future__ import annotations

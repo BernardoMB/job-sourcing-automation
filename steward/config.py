@@ -27,7 +27,7 @@ class ServerSpec(BaseModel):
     url: str = ""
     # Name of the .env variable holding the bearer token for `url`.
     token_env: str = ""
-    # Maps Steward's logical tool names to the external server's tool names.
+    # Maps Job Sourcer's logical tool names to the external server's tool names.
     tools: dict[str, str] = Field(default_factory=dict)
 
 
@@ -131,7 +131,7 @@ class LinkedInConfig(BaseModel):
     # session (for example the linkedin-toolkit Edge/Chrome extension + MCP server).
     upstream: ServerSpec | None = None
     server: ServerSpec | None = None
-    # When upstream.url points at this machine, Steward keeps the toolkit's long-running bridge
+    # When upstream.url points at this machine, Job Sourcer keeps the toolkit's long-running bridge
     # (`lit serve --http`) alive so the browser extension stays connected to it.
     manage_bridge: bool = True
     bridge_command: list[str] = Field(
@@ -191,6 +191,10 @@ class NotificationsConfig(BaseModel):
     min_pending: int = 3
     cooldown_minutes: int = 90
     meeting_reminder_minutes: int = 15
+    # Chime on this computer whenever a check brings new events (a recruiter message, call, invite, or meeting
+    # change). Empty sound_file = the bundled assets/Tethys Nexus 5.mp3.
+    sound: bool = True
+    sound_file: str = ""
 
 
 class DashboardConfig(BaseModel):
@@ -260,7 +264,7 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
     config_path = find_config_path(path)
     if not config_path.exists():
         raise FileNotFoundError(
-            f"No Steward config at {config_path}. Run `steward init` (or `steward init --sandbox`) first."
+            f"No Job Sourcer config at {config_path}. Run `steward init` (or `steward init --sandbox`) first."
         )
     load_env(config_path)
     raw: dict[str, Any] = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}

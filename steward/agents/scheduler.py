@@ -110,7 +110,7 @@ async def plan(ctx: AgentContext, event: dict[str, Any], cls: dict[str, Any]) ->
                     "title": meeting_title(ctx, cls, event),
                     "start": accepted["start"], "end": accepted["end"],
                     "attendees": [event["sender_address"]],
-                    "description": f"Scheduled by The Steward. {cls.get('summary', '')}".strip(),
+                    "description": f"Scheduled by Job Sourcer. {cls.get('summary', '')}".strip(),
                     "add_video_link": sch.add_video_link and not cls.get("meeting_link"),
                     "location": cls.get("meeting_link", ""),
                 }

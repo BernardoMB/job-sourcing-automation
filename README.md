@@ -1,6 +1,6 @@
-# The Steward
+# Job Sourcer
 
-**A recruiter-facing chief of staff.** The Steward is a local, self-hosted agentic harness that runs your
+**A recruiter-facing chief of staff.** Job Sourcer is a local, self-hosted agentic harness that runs your
 recruiter-facing job search asynchronously: it answers from your CV, schedules around your calendar, drafts every
 reply, and escalates to you only the decisions it has not yet earned the right to make alone.
 
@@ -9,7 +9,7 @@ handled (because you taught it those are safe), what waits for your judgment, an
 offers, anything it is unsure about). You approve, edit, or reject in one sitting, then say **go**, and it executes
 everything in a single batch: sends the emails, posts the LinkedIn replies, books the meetings.
 
-Every decision is recorded in an immutable ledger. Steward notices patterns, proposes rules, and you activate them.
+Every decision is recorded in an immutable ledger. Job Sourcer notices patterns, proposes rules, and you activate them.
 The briefing gets shorter. It earns autonomy one verified decision at a time.
 
 > Not a chatbot. Not a mass-apply bot. Not a LinkedIn scraper. Not a black box. Not a replacement for you in the
@@ -21,7 +21,7 @@ open source and runs on your machine.
 
 ## Everyday use: just keep the window open
 
-1. Double-click **`Start Steward.cmd`** (or turn on *Start when you log in* in Setup). Steward starts in the
+1. Double-click **`Start Job Sourcer.cmd`** (or turn on *Start when you log in* in Setup). Job Sourcer starts in the
    background and opens its window. There is no terminal to keep open.
 2. It watches continuously: email every minute, calendar every 2 minutes, LinkedIn every 10 minutes. Every new
    event (a recruiter message, a calendar invitation, a moved or cancelled meeting, a missed call or voicemail)
@@ -29,13 +29,13 @@ open source and runs on your machine.
    window updates by itself, with a toast, a count in the title, and optional desktop/phone notifications.
 3. You read the briefing, Approve / edit / Reject / "Don't ask again", and press **Go**. To send each approval
    immediately instead, switch on **Act on each approval immediately**.
-4. Not happy with a proposal? Type what to do instead in the item's **"Or tell Steward what to do instead"** field
+4. Not happy with a proposal? Type what to do instead in the item's **"Or tell Job Sourcer what to do instead"** field
    ("Decline politely, I only want remote roles", "Book Tuesday 10am", "Remind me to send my portfolio by Friday").
-   Steward rewrites the reply and the meeting/task/stage actions and shows the result for your approval. To shape
-   future replies, write a rule in **"Teach Steward a rule"** (for messages like this, this company, this recruiter,
+   Job Sourcer rewrites the reply and the meeting/task/stage actions and shows the result for your approval. To shape
+   future replies, write a rule in **"Teach Job Sourcer a rule"** (for messages like this, this company, this recruiter,
    or everything), then *Save rule* or *Save & re-draft this*.
 5. When a recruiter asks you to do something yourself (an online assessment, a form, a document, applying through
-   another link), Steward suggests a **task**. Accept it and it appears in the **Tasks** tab (tick it off when done);
+   another link), Job Sourcer suggests a **task**. Accept it and it appears in the **Tasks** tab (tick it off when done);
    deadlines show under **Upcoming meetings & deadlines** with reminders and raise the item's priority.
 
 First-time setup with your real accounts is a page in the app (**Setup** tab) and is described step by step in
@@ -45,7 +45,7 @@ First-time setup with your real accounts is a page in the app (**Setup** tab) an
 
 ## Quick start (sandbox, no credentials)
 
-Double-click **`Start Steward Demo.cmd`**. Or, from a terminal:
+Double-click **`Start Job Sourcer Demo.cmd`**. Or, from a terminal:
 
 The sandbox has a fake inbox, LinkedIn, and calendar with realistic recruiter traffic: a Kubernetes question, a
 proposed time that collides with your team sync, a salary question, an offer, a newsletter, an availability
@@ -175,11 +175,11 @@ the project folder; otherwise pass `-c path/to/steward.yaml`.
    target roles, locations, work authorization, notice period, relocation stance, salary policy, signature. These are
    the only non-CV facts drafts may state. `salary_expectation_private` is never disclosed.
 3. **Claude** (`llm:`):
-   - **`provider: claude-code` (default): your Claude Pro/Max subscription.** Steward runs the official, unmodified
+   - **`provider: claude-code` (default): your Claude Pro/Max subscription.** Job Sourcer runs the official, unmodified
      Claude Code program (`claude -p`) with your own sign-in, so no API key is needed and usage counts toward your
-     plan. Each call replaces Claude Code's system prompt with Steward's, has no tools, loads none of your Claude
+     plan. Each call replaces Claude Code's system prompt with Job Sourcer's, has no tools, loads none of your Claude
      Code settings/hooks/MCP servers, saves no session history, and returns JSON validated by `--json-schema`
-     (`steward/llm/claude_code_provider.py`). Steward never touches your credentials. Model: `claude_code_model`
+     (`steward/llm/claude_code_provider.py`). Job Sourcer never touches your credentials. Model: `claude_code_model`
      (`opus`, `sonnet`, `haiku`); per-step overrides in `llm.models`. When the plan's usage limit is reached, drafting
      pauses until the reset (shown in the dashboard) and queued messages are processed afterwards.
    - `provider: anthropic`: the Claude API with `ANTHROPIC_API_KEY` (or `ant auth login`). Default model
@@ -188,7 +188,7 @@ the project folder; otherwise pass `-c path/to/steward.yaml`.
    - `provider: grok` with `XAI_API_KEY`.
 4. **Email** (`mail:`): IMAP/SMTP, works with any provider. For Gmail: turn on 2-Step Verification, create an App
    Password, put it in `.env` as `STEWARD_MAIL_PASSWORD`, set `mail.username`. Tip: create a Gmail filter that labels
-   recruiter mail `Recruiters` and set `mail.folder: Recruiters`; otherwise Steward reads INBOX and a keyword
+   recruiter mail `Recruiters` and set `mail.folder: Recruiters`; otherwise Job Sourcer reads INBOX and a keyword
    pre-filter keeps unrelated mail away from the LLM (`mail.prefilter`). Messages are never marked as read.
 5. **Calendar** (`calendar:`): Google Calendar API (free). In Google Cloud Console create a project, enable the
    Calendar API, create an OAuth client of type *Desktop app*, save the JSON as `workspace/secrets/google_credentials.json`, then:
@@ -203,7 +203,7 @@ the project folder; otherwise pass `-c path/to/steward.yaml`.
 
    Scheduling rules live under `scheduling:` (working days/hours, buffer, minimum notice, blocked windows such as
    `"Fri 15:00-18:00"`, whether to book automatically when a proposed time is free, Meet links).
-6. **LinkedIn** (`linkedin:`): Steward talks to LinkedIn only through an upstream MCP server that drives **your own
+6. **LinkedIn** (`linkedin:`): Job Sourcer talks to LinkedIn only through an upstream MCP server that drives **your own
    logged-in Chrome session** (for example the open-source linkedin-toolkit Chrome extension + MCP server). Install
    it per its instructions, then:
 
@@ -232,11 +232,11 @@ the project folder; otherwise pass `-c path/to/steward.yaml`.
    ```
 
 **Any integration can be swapped** for a different MCP server: set `<section>.server: {command, args, env, tools}`
-where `tools` maps Steward's tool names to the other server's.
+where `tools` maps Job Sourcer's tool names to the other server's.
 
 ### Running it in the background (Windows)
 
-`Start Steward.cmd` runs `steward app`: it starts `steward serve` (dashboard + watch loop) as a hidden background
+`Start Job Sourcer.cmd` runs `steward app`: it starts `steward serve` (dashboard + watch loop) as a hidden background
 process if it is not already running, then opens the window. Logs go to `workspace/data/logs/server.log`.
 Start-at-login (Setup tab, or `steward autostart --enable`) puts a small script in your Windows Startup folder that
 runs `steward app --no-window`. Without the dashboard: `steward run` (same loop, in a terminal).
@@ -253,8 +253,8 @@ runs `steward app --no-window`. Without the dashboard: `steward run` (same loop,
 | Stop being asked about this kind of thing | Don't ask again... | `steward dont-ask 12 [--tech Kubernetes] [--silent]` |
 | Execute all decisions | Go | `steward go` |
 | Correct something done automatically | This was wrong... | `steward override 15 --note "..." --corrected "..."` |
-| Have it do something else instead | "Or tell Steward what to do instead" field | `steward instruct 12 "Decline politely"` |
-| Teach a rule for future replies | "Teach Steward a rule" field | `steward teach 12 "Ask for the end client" --scope company --redraft` |
+| Have it do something else instead | "Or tell Job Sourcer what to do instead" field | `steward instruct 12 "Decline politely"` |
+| Teach a rule for future replies | "Teach Job Sourcer a rule" field | `steward teach 12 "Ask for the end client" --scope company --redraft` |
 | Track things you must do | Tasks tab, task suggestions on items | `steward tasks`, `--add "..." --due 2026-10-30T17:00`, `--done 3`, `--accept 4` |
 | Accept/dismiss suggested automation | Accept / Dismiss | `steward accept 3`, `steward dismiss 3` |
 | See or change rules | Rules & learning tab | `steward rules`, `steward rules retire 2` |
@@ -275,14 +275,14 @@ integration secret. It is **optional and off by default**: your pipeline is alwa
 Pipeline tab); Notion is a mirror you can also edit. It needs a Notion internal-integration secret
 (`NOTION_TOKEN`, pasted in Setup) and a page shared with that integration (SETUP.md step 7).
 
-**Do I need to install MCP servers?** No, with one exception. Steward ships five MCP servers (`steward/servers/`:
+**Do I need to install MCP servers?** No, with one exception. Job Sourcer ships five MCP servers (`steward/servers/`:
 mail, calendar, cv, linkedin, notion) and starts each one automatically, as its own subprocess with only its own
-credentials, whenever it needs it. The exception is LinkedIn: Steward's LinkedIn server is a rate-limited proxy in
+credentials, whenever it needs it. The exception is LinkedIn: Job Sourcer's LinkedIn server is a rate-limited proxy in
 front of the open-source **linkedin-toolkit** (Chrome extension + local server, run with `npx linkedin-toolkit-mcp`),
-because the only safe way to use LinkedIn is through your own logged-in browser. Steward discovers the toolkit's
+because the only safe way to use LinkedIn is through your own logged-in browser. Job Sourcer discovers the toolkit's
 tool names by itself (`steward/linkedin_adapt.py`); `linkedin.upstream.tools` in steward.yaml can override them.
 
-**Is it constantly watching?** Yes, whenever Steward is running (`Start Steward.cmd`, start-at-login, or `steward
+**Is it constantly watching?** Yes, whenever Job Sourcer is running (`Start Job Sourcer.cmd`, start-at-login, or `steward
 serve`). It wakes every 30 s (`dashboard.tick_seconds`); each source has its own interval (`mail.poll_minutes: 1`,
 `calendar.poll_minutes: 2`, `linkedin.poll_minutes: 10`). Each cycle: ingest new events → re-prioritize what is
 waiting (stage changes, expired or conflicting times are re-drafted, priority scores recomputed) → process new
