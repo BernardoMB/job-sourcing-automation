@@ -21,30 +21,28 @@ def _long(d) -> str:
     return f"{d.strftime('%A')}, {d.strftime('%B')} {d.day} at {d.strftime('%I:%M %p').lstrip('0')}"
 
 
-def test_assessment_request_becomes_a_suggested_task_with_deadline(steward):
+def test_assessment_request_becomes_an_open_task_with_deadline(steward):
     run(steward.cycle(force=True))
     nimbus = drafts_by_company(steward)["Nimbus Data"]
-    suggested = steward.db.query("SELECT * FROM tasks WHERE status = 'suggested'")
-    assert len(suggested) == 1
-    task = suggested[0]
-    assert task["kind"] == "assessment" and task["link"].startswith("https://app.codility.com/")
+    tasks = steward.db.query("SELECT * FROM tasks WHERE kind = 'assessment'")
+    assert len(tasks) == 1  # one task, not one from the detector and another from the classifier
+    task = tasks[0]
+    assert task["status"] == "open" and task["link"].startswith("https://app.codility.com/")
     assert task["draft_id"] == nimbus["id"] and task["origin"] == "steward"
     due = parse_iso(task["due_at"]).astimezone(tz(steward.cfg.profile.timezone))
     assert (due.hour, due.minute) == (23, 59) and 3 <= (due - utcnow()).days <= 4
     view = briefing.draft_view(steward.cfg, steward.db, steward.db.get_draft(nimbus["id"]))
-    assert view["tasks"][0]["status"] == "suggested"
+    assert view["tasks"][0]["status"] == "open"
     assert "take care of it" in nimbus["actions_json"]  # the reply acknowledges the assessment
     assert any(w.startswith("deadline") for w in loads(steward.db.get_draft(nimbus["id"])["priority_why_json"]))
 
-    # Not on the deadline list until you accept it; then it is, and done takes it off.
-    assert briefing.build(steward.cfg, steward.db)["deadlines"] == []
-    tasks_mod.act(steward.cfg, steward.db, steward.ledger, task["id"], "accept")
+    # An assessment never waits for you to accept it: its deadline is listed right away; done takes it off.
     b = briefing.build(steward.cfg, steward.db)
     assert [d["id"] for d in b["deadlines"]] == [task["id"]] and b["counts"]["tasks_open"] == 1
     tasks_mod.act(steward.cfg, steward.db, steward.ledger, task["id"], "done")
     assert briefing.build(steward.cfg, steward.db)["deadlines"] == []
     changes = [e["payload"]["change"] for e in steward.ledger.entries("task", newest_first=False)]
-    assert changes == ["suggested", "accept", "done"]
+    assert changes == ["added", "done"]
 
 
 def test_manual_tasks(steward):
@@ -124,7 +122,7 @@ def test_dashboard_endpoints_for_tasks_instructions_and_rules(workspace):
         h = {"X-Steward-Token": token}
         client.post("/api/poll", headers=h)
         T = client.get("/api/tasks").json()
-        assert [t["status"] for t in T["tasks"]] == ["suggested"] and "assessment" in T["kinds"]
+        assert [(t["kind"], t["status"]) for t in T["tasks"]] == [("assessment", "open")] and "assessment" in T["kinds"]
         assert client.post("/api/tasks", json={"title": ""}, headers=h).status_code == 400
         tid = client.post("/api/tasks", json={"title": "Send portfolio", "due_at": "2030-02-01T12:00:00Z"},
                           headers=h).json()["id"]

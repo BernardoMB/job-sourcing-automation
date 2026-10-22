@@ -25,7 +25,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 
-from steward import ASSETS
+from steward import ASSETS, activity, work_queue
 from steward import briefing as briefing_mod
 from steward import decisions
 from steward import linkedin_bridge
@@ -66,16 +66,17 @@ def create_app(cfg: Config, watch: bool = True, tick: int | None = None) -> Fast
     def execute_on_approve() -> bool:
         return bool(db.kv_get("settings", {}).get("execute_on_approve", C().autonomy.execute_on_approve))
 
-    async def run_cycle(force: bool = False) -> dict[str, Any]:
+    async def run_cycle(force: bool = False, trigger: str = "scheduled") -> dict[str, Any]:
         async with lock:
             state["running"] = True
             bump("checking")
             try:
-                summary = await steward.cycle(force=force)
+                summary = await steward.cycle(force=force, trigger=trigger)
                 state["last_error"] = ""
             except Exception as exc:  # noqa: BLE001
                 state["last_error"] = str(exc)
                 log.exception("cycle failed")
+                activity.record(db, "check", f"Check ({trigger}) crashed: {exc}", "error")
                 summary = {"errors": [str(exc)], "processed": 0, "auto_executed": 0, "ingested": {}}
             finally:
                 state["running"] = False
@@ -92,7 +93,7 @@ def create_app(cfg: Config, watch: bool = True, tick: int | None = None) -> Fast
     async def background() -> None:
         await asyncio.sleep(1)
         while True:
-            await run_cycle()
+            await run_cycle(trigger="scheduled")
             await asyncio.sleep(max(int(tick or C().dashboard.tick_seconds), 5))
 
     @contextlib.asynccontextmanager
@@ -181,6 +182,7 @@ def create_app(cfg: Config, watch: bool = True, tick: int | None = None) -> Fast
                                "linkedin": C().linkedin.poll_minutes}}
         b["stages"] = STAGES
         b["settings"] = {"execute_on_approve": execute_on_approve()}
+        b["linkedin_hours"] = C().linkedin.business_hours
         return b
 
     @app.get("/api/history")
@@ -193,7 +195,7 @@ def create_app(cfg: Config, watch: bool = True, tick: int | None = None) -> Fast
                        "edited": "edited (not run yet)", "rejected": "rejected (not committed yet)",
                        "queued": "approved, queued", "executing": "running", "executed": "done",
                        "deferred": "waiting (LinkedIn pacing)", "failed": "failed", "dismissed": "rejected",
-                       "superseded": "replaced by a newer draft"}.get(d["status"], d["status"])
+                       "superseded": "no longer needed", "discarded": "discarded by you"}.get(d["status"], d["status"])
             who = "Job Sourcer (rule)" if d["route"] != "ask" and d["status"] in ("executed", "queued", "executing") else \
                 ("you" if d["decided_at"] else "")
             out.append({
@@ -363,7 +365,7 @@ def create_app(cfg: Config, watch: bool = True, tick: int | None = None) -> Fast
 
     @app.post("/api/poll")
     async def poll() -> dict[str, Any]:
-        summary = await run_cycle(force=True)
+        summary = await run_cycle(force=True, trigger="you pressed Check now")
         return {k: v for k, v in summary.items() if k != "learning"}
 
     @app.post("/api/go")
@@ -372,8 +374,44 @@ def create_app(cfg: Config, watch: bool = True, tick: int | None = None) -> Fast
             result = await steward.go()
         meetings_cache["at"] = 0.0
         result.pop("learning", None)
+        c = result.get("committed", {})
+        activity.record(db, "action", f"You pressed Go: {c.get('approved', 0)} approved, {c.get('rejected', 0)} "
+                        f"rejected · {result.get('executed', 0)} executed, {result.get('deferred', 0)} deferred, "
+                        f"{result.get('failed', 0)} failed", "warn" if result.get("failed") else "info")
         bump("go", executed=result.get("executed", 0))
         return result
+
+    @app.post("/api/drafts/{draft_id}/execute")
+    @app.post("/api/drafts/{draft_id}/reexecute")
+    async def execute_now(draft_id: int) -> dict[str, Any]:
+        """Execute / Re-execute: run a queued item now, skipping LinkedIn business hours and pacing."""
+        try:
+            async with lock:
+                res = await steward.execute_now(draft_id)
+        except decisions.DecisionError as exc:
+            raise bad(exc)
+        meetings_cache["at"] = 0.0
+        bump("executed", id=draft_id)
+        return res
+
+    @app.post("/api/drafts/{draft_id}/discard")
+    async def discard(draft_id: int) -> dict[str, Any]:
+        """Discard a queued item so it never runs."""
+        try:
+            async with lock:
+                res = await steward.discard(draft_id)
+        except decisions.DecisionError as exc:
+            raise bad(exc)
+        bump("discarded", id=draft_id)
+        return res
+
+    @app.get("/api/queue")
+    async def get_queue() -> dict[str, Any]:
+        return {"items": work_queue.items(C(), db)}
+
+    @app.get("/api/logs")
+    async def get_logs() -> dict[str, Any]:
+        return {"entries": activity.recent(db), "blockers": work_queue.blockers(C(), db)}
 
     @app.post("/api/settings")
     async def settings(body: dict[str, Any]) -> dict[str, Any]:

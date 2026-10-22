@@ -93,6 +93,16 @@ Job Sourcer reads INBOX every minute without marking anything as read. Unrelated
 before any AI call. If you prefer, create a Gmail filter that labels recruiter mail `Recruiters` and type
 `Recruiters` in the *Folder / Gmail label* field.
 
+- **Replies go back on the channel the message came from**: an email gets an email reply, a LinkedIn message a
+  LinkedIn reply.
+- **Mail from LinkedIn is never answered by email** (message and InMail notifications, job alerts, digests). When
+  one says someone messaged you, Job Sourcer checks LinkedIn right away and drafts the reply there.
+- **Recruiters' meeting invitations go on your calendar right away, without asking**: an invitation file (`.ics`,
+  as sent by Google, Outlook, Teams, Zoom, Calendly) or an "Add to calendar" link with the time in it (Google,
+  Outlook, Yahoo). The recruiter is not sent a reply and nobody is invited; answering Yes/No stays your call. An
+  invitation already on your calendar is not added again. If an email offers "Add to Calendar" but its time can't
+  be read, the Logs tab says so.
+
 ## 4. Google Calendar (Setup → step 5)
 
 One-time Google Cloud setup (about 5 minutes):
@@ -224,5 +234,23 @@ Turn this on so Job Sourcer keeps watching even when its window is closed. Turni
   and two hours before (if notifications are on), and items with close deadlines move up the queue. Due times use
   the time zone from your profile.
 - Join the meetings it books (they appear under *Upcoming meetings & deadlines* with join links).
+- **Queue tab**: every decided action that has not finished (waiting for Go, queued, running, deferred, failed,
+  waiting in the LinkedIn toolkit) and what finished or was closed in the last days. LinkedIn replies wait for
+  `linkedin.business_hours`; **Execute** on a deferred item sends it now. Each item has **Actions ▾**:
+  **Re-execute** runs it again now (a failed one, or one the LinkedIn toolkit failed or still holds), and
+  **Discard** drops it for good (status *Discarded*; one waiting in the toolkit is rejected there too). The
+  toolkit's own Copilot mode and hours still apply: in Copilot mode only you can approve a reply in the extension.
+- **You can always answer recruiters yourself.** On every check Job Sourcer reconciles open items with what really
+  happened: if you already replied on LinkedIn or from your mailbox (it reads your Sent folder's headers), or
+  answered an invitation in your calendar, the item is closed as *No longer needed* and nothing is sent. A reply it
+  drafted that shows up in the conversation is marked done. Replies handed to the LinkedIn toolkit follow its
+  queue: sent, failed (with its reason), or rejected.
+- **Online assessments are never missed.** An email inviting you to an assessment (HackerRank, Codility,
+  CodeSignal, TestGorilla, ...) becomes an open task with the test link and the deadline, listed under *Upcoming
+  meetings & deadlines* with reminders. Reminders for the same test update that task instead of adding another.
+  Tick it off in the Tasks tab when you are done.
+- **Logs tab**: *What's blocking right now* (deferred, failed, or interrupted actions, decisions waiting for Go,
+  Claude paused, a check that failed), then every check and what triggered it, every new message and why one
+  was ignored, and every action with its outcome.
 
 All the CLI commands still work (`steward brief`, `steward go`, ...) if you ever want them.

@@ -364,6 +364,25 @@ class UpstreamLinkedIn:
             return {"status": "queued", "queue_id": raw.get("queueId", ""), "note": "queued in the LinkedIn toolkit"}
         return {"status": "sent", "message_id": str(_pick(raw or {}, "id", "messageId", "queueId", default=""))}
 
+    async def queue(self) -> list[dict[str, Any]]:
+        """The toolkit's approval queue: what is pending, sent, failed (and why), or rejected."""
+        async with self._open() as call:
+            raw = await call("queue_list", {})
+        items = raw if isinstance(raw, list) else (raw or {}).get("items") or []
+        out = []
+        for i in items:
+            if not isinstance(i, dict):
+                continue
+            err = ((i.get("result") or {}).get("error") or {}) if isinstance(i.get("result"), dict) else {}
+            out.append({"id": str(i.get("id", "")), "status": str(i.get("status", "")).lower(),
+                        "error": str(err.get("message") or ""), "error_code": str(err.get("code") or "")})
+        return out
+
+    async def queue_decide(self, queue_ids: list[str], approve: bool) -> dict[str, Any]:
+        """Send (approve) or drop (reject) queued items. The toolkit allows this only in Autopilot mode."""
+        async with self._open() as call:
+            return await call("queue_approve" if approve else "queue_reject", {"ids": queue_ids})
+
 
 _backend: SandboxLinkedIn | UpstreamLinkedIn | None = None
 
@@ -412,12 +431,35 @@ async def upstream_tools(refresh: bool = False) -> dict[str, Any]:
     return {"backend": "upstream", **(await b.discover(refresh=refresh))}
 
 
+@mcp.tool(annotations=READ_ONLY_REMOTE)
+@guarded
+async def toolkit_queue() -> dict[str, Any]:
+    """The linkedin-toolkit approval queue (status of every reply handed to it). Empty for other backends."""
+    b = backend()
+    if not isinstance(b, UpstreamLinkedIn):
+        return {"supported": False, "items": []}
+    return {"supported": True, "items": await b.queue()}
+
+
 @mcp.tool(annotations=WRITE)
 @guarded
-async def send_message(conversation_id: str, text: str) -> dict[str, Any]:
-    """Send a reply at human pace. Returns status sent, queued, or deferred (with retry_after_seconds)."""
+async def toolkit_queue_decide(queue_ids: list[str], approve: bool) -> dict[str, Any]:
+    """Send (approve=True) or drop queued items in the linkedin-toolkit. Executor only; Autopilot mode only."""
+    b = backend()
+    if not isinstance(b, UpstreamLinkedIn):
+        raise RuntimeError("Only the linkedin-toolkit backend has an approval queue")
+    return {"result": await b.queue_decide(queue_ids, approve)}
+
+
+@mcp.tool(annotations=WRITE)
+@guarded
+async def send_message(conversation_id: str, text: str, force: bool = False) -> dict[str, Any]:
+    """Send a reply at human pace. Returns status sent, queued, or deferred (with retry_after_seconds).
+
+    `force` is your explicit "Execute now": it skips business hours, caps, and the gap between sends.
+    """
     check = _pacing_check()
-    if not check["allowed"]:
+    if not check["allowed"] and not force:
         return {"status": "deferred", "reason": check["reason"], "retry_after_seconds": check["retry_after_seconds"]}
     result = await backend().send(conversation_id, text)
     _record_send()

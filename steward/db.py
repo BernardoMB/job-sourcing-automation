@@ -202,6 +202,19 @@ CREATE TABLE IF NOT EXISTS subagent_calls (
     created_at TEXT NOT NULL
 );
 
+-- What the app did, for the Logs tab: every check, new message, action, and what blocked it.
+CREATE TABLE IF NOT EXISTS activity (
+    id INTEGER PRIMARY KEY,
+    at TEXT NOT NULL,
+    kind TEXT NOT NULL,                   -- check | message | draft | action | calendar | system
+    level TEXT NOT NULL DEFAULT 'info',   -- info | warn | error
+    message TEXT NOT NULL,
+    details_json TEXT,
+    draft_id INTEGER,
+    event_id INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_activity_at ON activity(at);
+
 CREATE TABLE IF NOT EXISTS notifications (
     id INTEGER PRIMARY KEY,
     kind TEXT NOT NULL,
@@ -252,6 +265,7 @@ MIGRATIONS = [
     ("preferences", "company", "TEXT"),
     ("preferences", "sender", "TEXT"),
     ("drafts", "revised_from", "INTEGER"),
+    ("drafts", "closed_at", "TEXT"),      # when it was discarded, or found no longer needed
 ]
 
 

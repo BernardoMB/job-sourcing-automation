@@ -39,6 +39,8 @@ def schedule_block(sched: dict[str, Any]) -> dict[str, Any]:
             "propose_slots": "Offer these slots for a call.",
             "invite_accept": "The invitation fits the calendar and will be accepted.",
             "invite_conflict": "The invitation conflicts. Ask to move it and offer the slots.",
+            "invite_added": "The recruiter's invitation is already on the candidate's calendar at accepted_time. "
+                            "Confirm that time if a reply is needed; never propose or book another one.",
             "unknown": "Availability is unknown. Do not commit to any time.",
         }.get(sched.get("kind", "none"), ""),
         "accepted_time": sched.get("accepted_label", ""),

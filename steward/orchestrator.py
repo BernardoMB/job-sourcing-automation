@@ -16,7 +16,8 @@ import re
 from datetime import timedelta
 from typing import Any
 
-from steward import decisions, linkedin_bridge, notify, pipeline, priority, sound
+from steward import (activity, assessments, channels, decisions, linkedin_bridge, notify, pipeline, priority,
+                     reconcile, sound)
 from steward import tasks as tasks_mod
 from steward.agents import classifier, cv_analyst, drafter, fewshot, instructor, scheduler
 from steward.agents.base import AgentContext
@@ -30,13 +31,15 @@ from steward.llm import LLMError, LLMRefusal, LLMUnavailable, get_llm
 from steward.mcp_hub import IntegrationDisabled, MCPHub, MCPToolError
 from steward.taxonomy import ACTIVE_STAGES, risk_of
 from steward.timeutil import days_between, fmt_local, fmt_range, now_iso, parse_iso, to_iso, utcnow
+from steward.work_queue import queue_actions
 
 log = logging.getLogger("steward")
 
 PREFILTER = re.compile(
     r"\b(recruit|hiring|hire|role|position|opportunit|job|interview|candidate|talent|offer|salary|compensation|"
     r"resume|cv|your (background|profile|experience)|engineer|developer|team|headcount|availability|schedule|"
-    r"voicemail|missed call)",
+    r"voicemail|missed call|assessment|coding (test|challenge)|online test|hackerrank|codility|codesignal|"
+    r"testgorilla|hackerearth|coderbyte|karat|mettl|imocha|testdome|devskiller|coderpad|codingame|hirevue)",
     re.IGNORECASE,
 )
 
@@ -64,11 +67,14 @@ class Steward:
         return AgentContext(self.cfg, self.db, self.llm, hub, self.ledger)
 
     # -- the cycle --------------------------------------------------------------
-    async def cycle(self, force: bool = False) -> dict[str, Any]:
+    async def cycle(self, force: bool = False, trigger: str = "scheduled") -> dict[str, Any]:
+        started = utcnow()
         summary: dict[str, Any] = {"ingested": {}, "processed": 0, "auto_executed": 0, "errors": []}
+        checked: dict[str, str] = {}
         bridge = await asyncio.to_thread(linkedin_bridge.ensure_running, self.cfg)
         if bridge.get("note"):
             summary["errors"].append(f"linkedin bridge: {bridge['note']}")
+        self.retire_linkedin_email_drafts()
         last_event = self.db.scalar("SELECT COALESCE(MAX(id), 0) FROM events") or 0
         async with MCPHub(self.cfg) as hub:
             for source, fn, minutes in (
@@ -76,14 +82,23 @@ class Steward:
                 ("linkedin", self.ingest_linkedin, self.cfg.linkedin.poll_minutes),
                 ("calendar", self.ingest_calendar, self.cfg.calendar.poll_minutes),
             ):
-                if not force and not self._due(source, minutes):
+                # A LinkedIn message notification in the mail makes LinkedIn due right away.
+                nudged = source == "linkedin" and bool(self.db.kv_get("linkedin:check_now"))
+                if not force and not nudged and not self._due(source, minutes):
+                    checked[source] = "not due"
                     continue
                 try:
                     summary["ingested"][source] = await fn(hub)
                     self.db.kv_set(f"last_poll:{source}", now_iso())
+                    checked[source] = f"{summary['ingested'][source]} new" + (" (a LinkedIn email said someone "
+                                                                              "messaged you)" if nudged else "")
+                    if nudged:
+                        self.db.kv_set("linkedin:check_now", None)
                 except IntegrationDisabled:
+                    checked[source] = "off"
                     continue
                 except (MCPToolError, OSError) as exc:
+                    checked[source] = "failed"
                     summary["errors"].append(f"{source}: {exc}")
                     log.warning("ingest %s failed: %s", source, exc)
             # Chime now, before the slow drafting: filtered-out mail and our own follow-ups don't count.
@@ -91,6 +106,8 @@ class Steward:
                 "SELECT COUNT(*) FROM events WHERE id > ? AND source != 'steward' AND status != 'ignored'",
                 (last_event,)) or 0
             sound.new_events(self.cfg, summary["new_events"])
+            # Anything you already handled yourself (on LinkedIn, by email, in your calendar) is closed now.
+            summary["reconciled"] = await reconcile.run(self, hub, checked, summary["errors"])
             summary["ingested"]["follow_ups"] = self.detect_follow_ups()
             try:
                 summary["reprioritized"] = await self.reprioritize(hub)
@@ -112,7 +129,43 @@ class Steward:
             except Exception as exc:  # noqa: BLE001
                 summary["errors"].append(f"notify: {exc}")
         self.db.kv_set("last_cycle", {"at": now_iso(), "summary": {k: v for k, v in summary.items() if k != "learning"}})
+        self.db.kv_set("last_check_errors", summary["errors"])
+        self._log_check(trigger, checked, summary, (utcnow() - started).total_seconds())
         return summary
+
+    def _log_check(self, trigger: str, checked: dict[str, str], summary: dict[str, Any], seconds: float) -> None:
+        names = {"email": "email", "linkedin": "LinkedIn", "calendar": "calendar"}
+        idle = all(state in ("not due", "off") for state in checked.values()) and not (
+            summary["processed"] or summary["auto_executed"] or summary.get("deferred_retried") or summary["errors"]
+            or summary.get("reconciled"))
+        if idle and trigger == "scheduled":
+            return  # the loop woke up but nothing was due: not a check worth a line
+        parts = [f"{names[s]}: {state}" for s, state in checked.items()]
+        for label, n in (("processed", summary["processed"]), ("handled automatically", summary["auto_executed"]),
+                         ("reconciled", summary.get("reconciled", 0)),
+                         ("deferred actions sent", summary.get("deferred_retried", 0))):
+            if n:
+                parts.append(f"{label} {n}")
+        errors = summary["errors"]
+        activity.record(self.db, "check", f"Check ({trigger}, {seconds:.0f}s): " + " · ".join(parts)
+                        + (f" · {len(errors)} problem{'s' if len(errors) != 1 else ''}" if errors else ""),
+                        "warn" if errors else "info", details={"checked": checked, "errors": errors})
+        for err in errors:
+            activity.record(self.db, "check", str(err)[:1000], "error")
+
+    def retire_linkedin_email_drafts(self) -> int:
+        """Drafts that would email a LinkedIn address (made before that was forbidden) are withdrawn."""
+        retired = 0
+        for d in self.db.query("SELECT * FROM drafts WHERE status IN ('pending', 'approved', 'edited', 'queued', "
+                               "'deferred', 'failed')"):
+            actions = loads(d["final_actions_json"], None) or loads(d["actions_json"], [])
+            if any(a["type"] == "send_email" and not a.get("skip")
+                   and any(channels.is_linkedin_address(t) for t in a["payload"].get("to", [])) for a in actions):
+                why = "Withdrawn: it would email LinkedIn. LinkedIn messages are answered on LinkedIn."
+                self.db.update("drafts", d["id"], {"status": "superseded", "status_reason": why})
+                activity.record(self.db, "draft", f"{d['summary']}: {why}", "warn", draft_id=d["id"])
+                retired += 1
+        return retired
 
     async def go(self) -> dict[str, Any]:
         async with MCPHub(self.cfg) as hub:
@@ -127,6 +180,61 @@ class Steward:
         except Exception as exc:  # noqa: BLE001
             result["errors"].append(f"learning: {exc}")
         return result
+
+    async def execute_now(self, draft_id: int) -> dict[str, Any]:
+        """Re-execute (and the Execute button): run a queued item now, skipping LinkedIn business hours and pacing.
+
+        Waiting for Go: committed and run. Deferred or failed: run again. Handed to the linkedin-toolkit: sent
+        from its queue if it is still waiting there (Autopilot), sent again if the toolkit failed it, and left
+        alone if the toolkit already sent it."""
+        draft = self.db.get_draft(draft_id)
+        if draft is None or not queue_actions(self.db, draft)["can_reexecute"]:
+            raise decisions.DecisionError("This item cannot be re-executed (it is done, discarded, or not decided yet)")
+        async with MCPHub(self.cfg) as hub:
+            if draft["status"] in ("approved", "edited"):
+                decisions.commit(self.cfg, self.db, self.ledger, draft)
+            for x in reconcile.handed_off(self):
+                if x["draft_id"] != draft_id:
+                    continue
+                items = await reconcile.toolkit_items(hub) or {}
+                state = (items.get(x["queue_id"]) or {}).get("status", "")
+                if state == "sent":
+                    await reconcile.sync_toolkit(self, hub)
+                    return {"draft_id": draft_id, "status": "executed", "reason": "The LinkedIn toolkit already sent it."}
+                if state in ("pending", "approved"):
+                    problem = await reconcile.toolkit_decide(hub, x["queue_id"], approve=True)
+                    reason = ("Sent from the LinkedIn toolkit queue." if not problem else
+                              "It is waiting in the LinkedIn toolkit, which is in Copilot mode: only you can approve "
+                              "it, in the extension popup (or turn on Autopilot there).")
+                    activity.record(self.db, "action", f"{draft['summary']}: {reason}", "warn" if problem else "info",
+                                    draft_id=draft_id)
+                    return {"draft_id": draft_id, "status": "executed" if not problem else "waiting", "reason": reason}
+                # failed, rejected, or gone from the toolkit: send it again
+                self.db.update("executions", x["id"], {"status": "failed", "updated_at": now_iso(),
+                                                       "error": f"re-executed by you (toolkit status: {state or 'gone'})"})
+            # An interrupted attempt is retried because you said so (the Queue tab asks you to check first).
+            self.db.execute("UPDATE executions SET status = 'failed', updated_at = ? WHERE draft_id = ? AND status = "
+                            "'unknown'", (now_iso(), draft_id))
+            result = await Executor(self.cfg, self.db, self.ledger, hub).execute_draft(draft_id, force=True)
+            await self.sync_notion(hub, [])
+        return result
+
+    async def discard(self, draft_id: int) -> dict[str, Any]:
+        """Discard a queued item: it will not run. One waiting in the linkedin-toolkit is rejected there too."""
+        draft = self.db.get_draft(draft_id)
+        if draft is None or not queue_actions(self.db, draft)["can_discard"]:
+            raise decisions.DecisionError("This item cannot be discarded (it is done, running, or already closed)")
+        reason = "Discarded by you."
+        waiting = [x for x in reconcile.handed_off(self) if x["draft_id"] == draft_id]
+        if waiting:
+            async with MCPHub(self.cfg) as hub:
+                items = await reconcile.toolkit_items(hub) or {}
+                for x in waiting:
+                    if (items.get(x["queue_id"]) or {}).get("status") in ("pending", "approved") and                             await reconcile.toolkit_decide(hub, x["queue_id"], approve=False):
+                        reason += (" It is still waiting in the LinkedIn toolkit (Copilot mode): reject it in the "
+                                   "extension popup too, or it may still be sent.")
+        reconcile.close(self, draft, reason, status="discarded", level="warn", kind="discard")
+        return {"draft_id": draft_id, "status": "discarded", "reason": reason}
 
     async def go_one(self, draft_id: int) -> dict[str, Any]:
         """Commit and execute a single decision right away (the "act on each approval" setting)."""
@@ -349,27 +457,42 @@ class Steward:
         me = (self.cfg.profile.email or self.cfg.mail.username or "").lower()
         count = 0
         for msg in res.get("messages", []):
-            if msg.get("from_email", "").lower() == me:
+            sender = msg.get("from_email", "").lower()
+            if sender == me:
                 continue
             thread_key = self._email_thread_key(msg)
             self.db.execute("INSERT OR IGNORE INTO message_ids (message_id, thread_key) VALUES (?, ?)",
                             (msg["message_id"], thread_key))
-            text = f"{msg.get('subject', '')}\n{msg.get('body_text', '')}"
+            subject, body = msg.get("subject", ""), msg.get("body_text", "")
             known_thread = self.db.query_one("SELECT 1 FROM opportunity_threads WHERE thread_key = ?", (thread_key,))
-            known_sender = self.db.query_one("SELECT 1 FROM opportunities WHERE lower(recruiter_email) = ?",
-                                             (msg.get("from_email", "").lower(),))
-            relevant = (self.cfg.mail.prefilter == "all" or known_thread or known_sender
-                        or PREFILTER.search(text) or msg.get("has_calendar_invite"))
+            known_sender = self.db.query_one("SELECT 1 FROM opportunities WHERE lower(recruiter_email) = ?", (sender,))
+            why = None
+            if channels.is_linkedin_address(sender):
+                # Never answered by email. A message notification means: read and answer it on LinkedIn, now.
+                notice = channels.is_linkedin_message_notice(sender, subject, body)
+                if notice and self.cfg.linkedin.backend != "disabled":
+                    self.db.kv_set("linkedin:check_now", True)
+                    why = "LinkedIn message notification: ignored here; the message is read and answered on LinkedIn."
+                elif notice:
+                    why = ("LinkedIn message notification: ignored here. Connect LinkedIn (Setup step 6) so Job "
+                           "Sourcer can answer it on LinkedIn.")
+                else:
+                    why = "Email from LinkedIn (alert or digest): never answered by email."
+            elif not (self.cfg.mail.prefilter == "all" or known_thread or known_sender
+                      or PREFILTER.search(f"{subject}\n{body}") or msg.get("has_calendar_invite")):
+                why = "Filtered out: no job-search signal (no LLM call made)."
             event_id = self._insert_event({
                 "source": "email", "external_id": msg["message_id"], "thread_key": thread_key,
-                "sender_name": msg.get("from_name", ""), "sender_address": msg.get("from_email", "").lower(),
-                "subject": msg.get("subject", ""), "body_text": msg.get("body_text", ""),
+                "sender_name": msg.get("from_name", ""), "sender_address": sender,
+                "subject": subject, "body_text": body,
                 "received_at": msg.get("date") or now_iso(), "raw_json": dumps(msg),
-                "status": "new" if relevant else "ignored",
-                "error": None if relevant else "Filtered out: no job-search signal (no LLM call made).",
+                "status": "ignored" if why else "new", "error": why,
             })
             if event_id:
                 count += 1
+                who = msg.get("from_name") or sender
+                activity.record(self.db, "message", f"Email from {who}: {subject or '(no subject)'}"
+                                + (f". {why}" if why else ""), event_id=event_id)
         self.db.kv_set("mail:last_uid", res.get("last_uid", since))
         return count
 
@@ -398,6 +521,8 @@ class Steward:
             })
             if event_id:
                 count += 1
+                activity.record(self.db, "message", f"LinkedIn message from {conv.get('participant_name') or 'someone'}"
+                                f" ({len(new_in)} new)", event_id=event_id)
             if not newest or (last.get("sent_at") or "") > newest:
                 newest = last.get("sent_at") or newest
         if newest:
@@ -418,6 +543,9 @@ class Steward:
             })
             if event_id:
                 count += 1
+                activity.record(self.db, "message", f"Calendar invite from {organizer.get('name') or organizer.get('email') or 'someone'}"
+                                f": {inv.get('title', '')} ({when[6:]}). It is on your calendar; whether to answer "
+                                "Yes/No is up to you.", event_id=event_id)
         return count + await self.detect_meeting_changes(hub)
 
     async def detect_meeting_changes(self, hub: MCPHub) -> int:
@@ -471,6 +599,8 @@ class Steward:
                                    "start": ref["start"], "end": ref["end"]}),
             })
             count += 1 if event_id else 0
+            if event_id:
+                activity.record(self.db, "message", f"Meeting {change}: {ref['title']}. {text}", event_id=event_id)
         self.db.kv_set("meeting_snapshot", current)
         return count
 
@@ -590,8 +720,9 @@ class Steward:
         """Where to answer someone who reached you by phone: their latest email or LinkedIn thread."""
         if not opp:
             return None
-        ev = self.db.query_one("SELECT * FROM events WHERE opportunity_id = ? AND source IN ('email', 'linkedin') "
-                               "ORDER BY received_at DESC LIMIT 1", (opp["id"],))
+        ev = next((e for e in self.db.query(
+            "SELECT * FROM events WHERE opportunity_id = ? AND source IN ('email', 'linkedin') ORDER BY received_at DESC",
+            (opp["id"],)) if not (e["source"] == "email" and channels.is_linkedin_address(e["sender_address"]))), None)
         if ev and ev["source"] == "linkedin":
             return {"channel": "linkedin", "conversation_id": ev["thread_key"], "recipient": ev["sender_name"],
                     "thread_key": ev["thread_key"]}
@@ -603,7 +734,7 @@ class Steward:
                 refs.append(raw["message_id"])
             return {"channel": "email", "to": [ev["sender_address"]], "subject": f"Re: {subject}" if subject else "",
                     "in_reply_to": raw.get("message_id", ""), "references": refs, "thread_key": ev["thread_key"]}
-        if opp.get("recruiter_email"):
+        if opp.get("recruiter_email") and not channels.is_linkedin_address(opp["recruiter_email"]):
             what = " - ".join(x for x in (opp.get("role"), opp.get("company")) if x)
             return {"channel": "email", "to": [opp["recruiter_email"]], "subject": f"Sorry I missed your call{': ' + what if what else ''}",
                     "in_reply_to": "", "references": []}
@@ -621,6 +752,15 @@ class Steward:
                                              event, raw.get("change") in ("cancelled", "declined"))
         else:
             cls = await classifier.classify(ctx, event, thread)
+        # An online assessment is never missed, whatever the classifier made of the email.
+        test = assessments.detect({**raw, "subject": event.get("subject", ""), "body_text": event.get("body_text", ""),
+                                   "received_at": event.get("received_at")},
+                                  self.cfg.profile.timezone, cls.get("company", "")) \
+            if event["source"] == "email" else None
+        if test:
+            cls["is_recruiter_related"] = True
+            if assessments.from_platform(event.get("sender_address", "")):
+                cls["needs_reply"] = False  # the platform itself, not a person
         self.db.update("events", event["id"], {"classification_json": dumps(cls)})
 
         if not cls["is_recruiter_related"]:
@@ -648,6 +788,8 @@ class Steward:
             else:
                 self._call_back_item(event, cls, opp)
                 return "queued"
+        if test:
+            self.record_assessment(event, test, opp)
         tasks_mod.suggest_from_classification(self.cfg, self.db, self.ledger, cls, event["id"],
                                               opp["id"] if opp else None)
         if opp and ctx.hub.enabled("notion"):
@@ -664,8 +806,12 @@ class Steward:
             "(SELECT id FROM events WHERE thread_key = ? AND source = ? AND id != ?)",
             (event.get("thread_key") or "-", event["source"], event["id"]))
 
+        added = await self._add_invites(ctx, event, cls, opp)
         evidence = await cv_analyst.analyze(ctx, cls)
-        sched = await scheduler.plan(ctx, event, cls)
+        # Once the invitation is on the calendar, nothing else gets booked for this message.
+        sched = await scheduler.plan(ctx, event, {**cls, "proposed_times": []} if added else cls)
+        if added and sched["kind"] == "none":
+            sched["kind"], sched["accepted_label"] = "invite_added", "; ".join(added)
         if event["source"] == "calendar":
             # Ask the organizer to move a conflicting invite; offer new times when a meeting was dropped.
             needs_text = sched["kind"] == "invite_conflict" or (meeting_change and cls["needs_reply"])
@@ -709,6 +855,83 @@ class Steward:
             return "auto"
         return "queued"
 
+    def record_assessment(self, event: dict[str, Any], test: dict[str, Any], opp: dict[str, Any] | None) -> int:
+        """An online assessment becomes an open task (link + deadline), so it shows under Upcoming deadlines.
+
+        A reminder for the same test (same title and deadline, or same link) updates that task instead."""
+        tz_name = self.cfg.profile.timezone
+        title = assessments.task_title({**test, "company": test["company"] or (opp or {}).get("company") or ""})
+        due_label = fmt_local(test["due_at"], tz_name) if test["due_at"] else ""
+        details = " · ".join(x for x in (
+            f"{test['platform']} assessment" if test["platform"] else "Online assessment",
+            test["duration"] and f"duration {test['duration']}", due_label and f"deadline {due_label}") if x)
+        same = self.db.query_one(
+            "SELECT * FROM tasks WHERE kind = 'assessment' AND status != 'dismissed' AND ("
+            "(link IS NOT NULL AND link = ?) OR (instr(lower(title), lower(?)) > 0 AND ifnull(due_at, '') = ?))",
+            (test["link"] or "-", test["title"], test["due_at"] or ""))
+        if same:
+            fields = {k: v for k, v in (("link", test["link"]), ("due_at", test["due_at"])) if v and not same[k]}
+            if fields:
+                tasks_mod.act(self.cfg, self.db, self.ledger, same["id"], "update", fields)
+            activity.record(self.db, "message", f"Reminder for an assessment already in your tasks: {same['title']}"
+                            + (f" (due {due_label})" if due_label else ""), event_id=event["id"])
+            return same["id"]
+        task_id = tasks_mod.add(self.cfg, self.db, self.ledger, title, details=details, kind="assessment",
+                                link=test["link"], due_at=test["due_at"], opportunity_id=opp["id"] if opp else None,
+                                origin="steward", status="open", event_id=event["id"])
+        activity.record(self.db, "message", f"Assessment found: {title}. "
+                        + (f"Deadline {due_label}: added to your tasks and to Upcoming meetings & deadlines."
+                           if due_label else "No deadline in the email: added to your tasks; set the due date there.")
+                        + ("" if test["link"] else " The test link is in the email."),
+                        "info" if due_label else "warn", event_id=event["id"])
+        return task_id
+
+    async def _add_invites(self, ctx: AgentContext, event: dict[str, Any], cls: dict[str, Any],
+                           opp: dict[str, Any] | None) -> list[str]:
+        """A recruiter's meeting invitation in an email goes on your calendar right away, without asking.
+
+        Added as is (no reply to the recruiter, nobody invited) and never twice. Returns the times added."""
+        raw = event["raw"]
+        found = [i for i in raw.get("invites") or [] if i.get("method") != "cancel"]
+        if event["source"] != "email" or not (found or raw.get("add_to_calendar")):
+            return []
+        who = event.get("sender_name") or event.get("sender_address")
+        if not found:
+            activity.record(self.db, "calendar", f"Email from {who} offers 'Add to Calendar', but its date and time "
+                            "could not be read (no invitation file, and the link carries no time). Add it yourself; "
+                            "the message is in your briefing.", "warn", event_id=event["id"])
+            return []
+        if cls.get("suspicious"):
+            activity.record(self.db, "calendar", f"Invitation from {who} not added: the message looks suspicious.",
+                            "warn", event_id=event["id"])
+            return []
+        if not ctx.hub.enabled("calendar"):
+            activity.record(self.db, "calendar", f"Invitation from {who} not added: the calendar is not connected "
+                            "(Setup step 5).", "warn", event_id=event["id"])
+            return []
+        tz_name = self.cfg.profile.timezone
+        labels = [f"{i['title']}, {fmt_range(i['start'], i['end'], tz_name)}" for i in found]
+        actions = [{"type": "add_to_calendar", "payload": {
+            "uid": i["uid"], "title": i["title"], "start": i["start"], "end": i["end"], "location": i["location"],
+            "description": i["description"], "organizer_email": i["organizer_email"] or event.get("sender_address", ""),
+            "organizer_name": i["organizer_name"] or event.get("sender_name", "")}} for i in found]
+        draft_id = self.db.insert("drafts", {
+            "event_id": event["id"], "opportunity_id": opp["id"] if opp else None, "channel": "calendar",
+            "summary": f"Added to your calendar: {'; '.join(labels)}", "actions_json": dumps(actions),
+            "analysis_json": dumps({"classification": cls}), "confidence": 1.0, "job_advancement": 1.0,
+            "routing_band": "HIGH", "risk_level": "low", "priority": "normal", "route": "auto_approve",
+            "route_reasons_json": dumps(["Recruiters' meeting invitations go on your calendar automatically, "
+                                         "without a reply to them."]),
+            "status": "queued", "created_at": now_iso(), "decided_at": now_iso(),
+        })
+        self.ledger.append("auto_execution", {
+            **decisions.ledger_payload(self.db, self.db.get_draft(draft_id), "auto", actions),
+            "rule_id": None, "tier": "standing_instruction",
+            "instruction": "Add recruiters' meeting invitations to my calendar without asking (no reply).",
+        }, event_id=event["id"], draft_id=draft_id)
+        await Executor(self.cfg, self.db, self.ledger, ctx.hub).execute_draft(draft_id)
+        return [fmt_range(i["start"], i["end"], tz_name) for i in found]
+
     def build_actions(self, event: dict[str, Any], cls: dict[str, Any], drafted: dict[str, Any],
                       sched: dict[str, Any], opp: dict[str, Any] | None) -> list[dict[str, Any]]:
         actions: list[dict[str, Any]] = []
@@ -741,6 +964,8 @@ class Steward:
                                                                  "recipient": event.get("sender_name", "")}})
             return actions
         to = event.get("sender_address") or (opp or {}).get("recruiter_email") or ""
+        if channels.is_linkedin_address(to) or channels.is_no_reply(to) or assessments.from_platform(to):
+            return actions  # never email LinkedIn, a no-reply address, or an assessment platform
         subject = drafted.get("reply_subject") or event.get("subject") or ""
         if subject and not subject.lower().startswith("re:"):
             subject = f"Re: {subject}"

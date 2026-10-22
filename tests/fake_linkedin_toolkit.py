@@ -16,6 +16,9 @@ from pathlib import Path
 from mcp.server.mcpserver import MCPServer
 
 STATE = Path(os.environ["FAKE_LI_STATE"])
+# Toolkit queue: {queue id: {"status": pending|sent|failed|rejected, "error": ...}}; Copilot mode refuses approvals.
+QUEUE = STATE.with_name(STATE.stem + "_queue.json")
+COPILOT = os.environ.get("FAKE_LI_MODE", "autopilot") == "copilot"
 NOW = int(time.time() * 1000)
 HOUR = 3_600_000
 
@@ -63,7 +66,37 @@ def linkedin_send_message(publicId: str, body: str, dry_run: bool = False) -> di
     sent = json.loads(STATE.read_text(encoding="utf-8")) if STATE.exists() else []
     sent.append({"publicId": publicId, "body": body})
     STATE.write_text(json.dumps(sent), encoding="utf-8")
+    queue = _queue()
+    queue[f"q_{len(sent)}"] = {"status": "pending"}
+    QUEUE.write_text(json.dumps(queue), encoding="utf-8")
     return {"status": "queued", "queueId": f"q_{len(sent)}"}
+
+
+def _queue() -> dict:
+    return json.loads(QUEUE.read_text(encoding="utf-8")) if QUEUE.exists() else {}
+
+
+def _decide(ids: list[str], status: str) -> dict:
+    if COPILOT:
+        raise RuntimeError(json.dumps({"error": {"code": "UNAUTHORIZED", "message": "In Copilot mode approval is a "
+                                                                                     "human action in the popup."}}))
+    queue = _queue()
+    for i in ids:
+        queue.setdefault(i, {})["status"] = status
+    QUEUE.write_text(json.dumps(queue), encoding="utf-8")
+    return {"updated": ids}
+
+
+@app.tool()
+def linkedin_queue_approve(ids: list[str], dry_run: bool = False) -> dict:
+    """Approve queued writes by id so the extension sends them (Autopilot only)."""
+    return _decide(ids, "sent")
+
+
+@app.tool()
+def linkedin_queue_reject(ids: list[str], dry_run: bool = False) -> dict:
+    """Reject queued writes by id so they are never sent (Autopilot only)."""
+    return _decide(ids, "rejected")
 
 
 @app.tool()
@@ -80,8 +113,11 @@ def linkedin_send_invite(publicId: str, note: str = "", dry_run: bool = False) -
 
 @app.tool()
 def linkedin_queue_list(status: str = "") -> dict:
-    """List the human-approval queue (decoy)."""
-    return {"items": []}
+    """List the human-approval queue, optionally filtered by status."""
+    items = [{"id": k, "action": "outreach.message", "status": v.get("status", "pending"),
+              **({"result": {"error": {"code": v.get("code", ""), "message": v["error"]}}} if v.get("error") else {})}
+             for k, v in _queue().items()]
+    return {"items": [i for i in items if not status or i["status"] == status]}
 
 
 def serve_http(port: int) -> None:

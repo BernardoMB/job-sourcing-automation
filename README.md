@@ -34,7 +34,11 @@ open source and runs on your machine.
    Job Sourcer rewrites the reply and the meeting/task/stage actions and shows the result for your approval. To shape
    future replies, write a rule in **"Teach Job Sourcer a rule"** (for messages like this, this company, this recruiter,
    or everything), then *Save rule* or *Save & re-draft this*.
-5. When a recruiter asks you to do something yourself (an online assessment, a form, a document, applying through
+5. Replies go back on the channel the message came from (email or LinkedIn); mail from LinkedIn is never answered
+   by email. Recruiters' meeting invitations go on your calendar right away, without asking and without a reply.
+   The **Queue** tab shows every decided action and its status (**Execute** sends a deferred one now), and the
+   **Logs** tab shows every check, what was ignored and why, and what is blocking anything.
+6. When a recruiter asks you to do something yourself (an online assessment, a form, a document, applying through
    another link), Job Sourcer suggests a **task**. Accept it and it appears in the **Tasks** tab (tick it off when done);
    deadlines show under **Upcoming meetings & deadlines** with reminders and raise the item's priority.
 

@@ -73,6 +73,21 @@ class SandboxCalendar:
                 return {"status": "ok", "event_id": event_id, "response": response}
         raise ValueError(f"No event {event_id}")
 
+    def by_uid(self, uid: str) -> list[dict[str, Any]]:
+        return [e for e in self.store.load()["events"] if uid and e.get("ical_uid") == uid
+                and e.get("status", "confirmed") != "cancelled"]
+
+    def add_copy(self, body: dict[str, Any]) -> dict[str, Any]:
+        data = self.store.load()
+        event = {"id": f"inv-{uuid.uuid4().hex[:10]}", "ical_uid": body["uid"], "title": body["title"],
+                 "start": body["start"], "end": body["end"], "description": body.get("description", ""),
+                 "location": body.get("location", ""), "meeting_link": "", "attendees": [],
+                 "organizer": {"email": body.get("organizer_email", ""), "name": body.get("organizer_name", "")},
+                 "my_response": "accepted", "created_by_steward": True}
+        data["events"].append(event)
+        self.store.save(data)
+        return {"id": event["id"]}
+
 
 class GoogleCalendar:
     def __init__(self) -> None:
@@ -179,6 +194,30 @@ class GoogleCalendar:
         self.svc.events().patch(calendarId=self.cal, eventId=event_id, body={"attendees": attendees},
                                 sendUpdates="all").execute()
         return {"status": "ok", "event_id": event_id, "response": response}
+
+    def by_uid(self, uid: str) -> list[dict[str, Any]]:
+        if not uid:
+            return []
+        res = self.svc.events().list(calendarId=self.cal, iCalUID=uid, showDeleted=False).execute()
+        return [self._norm(i) for i in res.get("items", []) if i.get("status") != "cancelled"]
+
+    def add_copy(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Import the invitation as is: Google sends nothing to anyone, and the same iCalUID never appears twice."""
+        event = {
+            "summary": body["title"], "description": body.get("description", ""), "location": body.get("location", ""),
+            "start": {"dateTime": body["start"]}, "end": {"dateTime": body["end"]},
+            "extendedProperties": {"private": {"steward": "1"}},
+        }
+        if body.get("organizer_email"):
+            event["organizer"] = {"email": body["organizer_email"], "displayName": body.get("organizer_name", "")}
+        try:
+            res = self.svc.events().import_(calendarId=self.cal,
+                                            body={**event, "iCalUID": body["uid"] or f"{uuid.uuid4().hex}@jobsourcer"}
+                                            ).execute()
+        except Exception:  # noqa: BLE001 - e.g. the UID belongs to an event you deleted: add a plain copy
+            event.pop("organizer", None)
+            res = self.svc.events().insert(calendarId=self.cal, body=event, sendUpdates="none").execute()
+        return {"id": res["id"]}
 
 
 _backend: SandboxCalendar | GoogleCalendar | None = None
@@ -288,6 +327,39 @@ def create_event(
             "send_updates": send_updates,
         }
     )
+
+
+@mcp.tool(annotations=WRITE)
+@guarded
+def add_invite(
+    title: str,
+    start: str,
+    end: str,
+    uid: str = "",
+    description: str = "",
+    location: str = "",
+    organizer_email: str = "",
+    organizer_name: str = "",
+) -> dict[str, Any]:
+    """Put an invitation you received on your calendar as is: no reply to the organizer, nobody is invited,
+    and never twice (same invitation UID, or the same time with the same title or organizer). Executor only."""
+    s, e = _dt(start, "start"), _dt(end, "end")
+    if e <= s:
+        raise ValueError("end must be after start")
+    b = backend()
+    same = b.by_uid(uid)
+    if not same:
+        title_l, org_l = title.strip().lower(), organizer_email.strip().lower()
+        same = [x for x in b.list(s - timedelta(minutes=1), e + timedelta(minutes=1))
+                if parse_iso(x["start"]) == s and parse_iso(x["end"]) == e
+                and (x.get("title", "").strip().lower() == title_l
+                     or (org_l and (x.get("organizer") or {}).get("email", "").lower() == org_l))]
+    if same:
+        return {"status": "exists", "id": same[0]["id"], "title": same[0].get("title", "")}
+    overlaps = [x["title"] for x in b.busy(s, e)]
+    res = b.add_copy({"uid": uid, "title": title, "start": to_iso(s), "end": to_iso(e), "description": description,
+                      "location": location, "organizer_email": organizer_email, "organizer_name": organizer_name})
+    return {"status": "added", "id": res["id"], "overlaps": overlaps}
 
 
 @mcp.tool(annotations=WRITE)

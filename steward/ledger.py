@@ -27,6 +27,8 @@ KINDS = {
     "proposal",          # you accepted or dismissed a suggested automation
     "task",              # a task was suggested, accepted, added, completed, or dismissed
     "instruction",       # you told Job Sourcer what to do instead of its draft
+    "discard",           # you discarded a queued action before it ran (or while it waited in the LinkedIn toolkit)
+    "reconcile",         # an item was closed because you had already handled it yourself (replied, answered)
 }
 
 

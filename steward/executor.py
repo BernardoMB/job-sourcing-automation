@@ -16,12 +16,15 @@ import hashlib
 from datetime import timedelta
 from typing import Any
 
-from steward import decisions, pipeline
+from steward import activity, channels, decisions, pipeline
 from steward.config import Config
 from steward.db import Database, dumps, loads
 from steward.ledger import Ledger
 from steward.mcp_hub import ExecutorCapability, MCPHub
-from steward.timeutil import now_iso, parse_iso, to_iso, utcnow
+from steward.timeutil import fmt_local, now_iso, parse_iso, to_iso, utcnow
+
+ACTION_LABELS = {"send_email": "email reply", "send_linkedin": "LinkedIn reply", "create_event": "meeting booking",
+                 "rsvp_event": "invitation answer", "add_to_calendar": "add to calendar"}
 
 
 class SlotConflict(RuntimeError):
@@ -72,7 +75,8 @@ class Executor:
         return nxt is None or nxt <= utcnow()
 
     # -- one draft --------------------------------------------------------------
-    async def execute_draft(self, draft_id: int) -> dict[str, Any]:
+    async def execute_draft(self, draft_id: int, force: bool = False) -> dict[str, Any]:
+        """Run a draft's actions. `force` (your Execute button) skips LinkedIn's business hours and pacing."""
         draft = self.db.get_draft(draft_id)
         if draft is None:
             return {"draft_id": draft_id, "status": "failed", "error": "missing draft"}
@@ -106,7 +110,7 @@ class Executor:
                     "idempotency_key": key, "status": "in_flight", "created_at": now_iso(), "updated_at": now_iso(),
                 })
             try:
-                result = await self._run(action, draft, event)
+                result = await self._run(action, draft, event, force)
             except SlotConflict as exc:
                 self.db.update("executions", exec_id, {"status": "failed", "error": str(exc), "updated_at": now_iso()})
                 final_status, reason = "superseded", str(exc)
@@ -136,7 +140,7 @@ class Executor:
             outcomes.append({"index": index, "type": action["type"], "status": status, "result": result})
 
         if final_status == "executed" and any(o["status"] == "queued" for o in outcomes):
-            reason = ("LinkedIn reply handed to the linkedin-toolkit queue: approve it in the Chrome extension popup, "
+            reason = ("LinkedIn reply handed to the linkedin-toolkit queue: approve it in the browser extension popup, "
                       "or turn on its Autopilot so replies you approved here go out at its human pace.")
         updates: dict[str, Any] = {"status": final_status, "status_reason": reason or None}
         if final_status == "executed":
@@ -151,22 +155,57 @@ class Executor:
         self.db.update("drafts", draft_id, updates)
         if any(o["status"] not in ("already_done", "skipped") for o in outcomes):
             self.ledger.append("execution", {"status": final_status, "reason": reason, "outcomes": outcomes,
-                                             "route": draft["route"]},
+                                             "route": draft["route"], "forced": force},
                                event_id=draft["event_id"], draft_id=draft_id, rule_id=draft["matched_rule_id"])
+            self._log(draft, final_status, reason, outcomes, force)
         return {"draft_id": draft_id, "status": final_status, "reason": reason, "outcomes": outcomes}
 
-    async def _run(self, action: dict[str, Any], draft: dict[str, Any], event: dict[str, Any]) -> dict[str, Any]:
+    def _log(self, draft: dict[str, Any], status: str, reason: str, outcomes: list[dict[str, Any]], force: bool) -> None:
+        done = [ACTION_LABELS.get(o["type"], o["type"]) for o in outcomes if o["status"] in ("sent", "ok", "added")]
+        queued = [o for o in outcomes if o["status"] == "queued"]
+        exists = [o for o in outcomes if o["status"] == "exists"]
+        what = draft["summary"]
+        how = " (you pressed Execute: business hours and pacing skipped)" if force else ""
+        if status == "executed":
+            overlaps = sorted({t for o in outcomes for t in (o.get("result") or {}).get("overlaps") or []})
+            parts = ([f"done: {', '.join(done)}"] if done else []) + \
+                    (["LinkedIn reply handed to the linkedin-toolkit queue (approve it in the extension)"] if queued else []) + \
+                    (["already on your calendar, not added again"] if exists else []) + \
+                    ([f"it overlaps {', '.join(overlaps)} on your calendar"] if overlaps else [])
+            activity.record(self.db, "action", f"{what}: {'; '.join(parts) or 'nothing to do'}{how}",
+                            "warn" if overlaps else "info", draft_id=draft["id"])
+        elif status == "deferred":
+            nxt = next((o.get("retry_in") for o in outcomes if o["status"] == "deferred"), 0) or 0
+            when = fmt_local(utcnow() + timedelta(seconds=nxt), self.cfg.profile.timezone)
+            activity.record(self.db, "action", f"{what}: deferred, {reason}. Next try {when}, or press Execute in "
+                            "the Queue tab.", "warn", draft_id=draft["id"])
+        else:
+            activity.record(self.db, "action", f"{what}: {status}. {reason}{how}",
+                            "warn" if status == "superseded" else "error", draft_id=draft["id"])
+
+    async def _run(self, action: dict[str, Any], draft: dict[str, Any], event: dict[str, Any],
+                   force: bool = False) -> dict[str, Any]:
         p = action["payload"]
         kind = action["type"]
         if kind == "send_email":
+            if any(channels.is_linkedin_address(t) for t in p["to"] + (p.get("cc") or [])):
+                raise ValueError("Job Sourcer never emails LinkedIn addresses; LinkedIn messages are answered on "
+                                 "LinkedIn")
             return await self.hub.call("mail", "send_email", {
                 "to": p["to"], "subject": p.get("subject", ""), "body": p["body"], "cc": p.get("cc") or [],
                 "in_reply_to": p.get("in_reply_to", ""), "references": p.get("references") or [],
             }, capability=self._cap)
         if kind == "send_linkedin":
             return await self.hub.call("linkedin", "send_message",
-                                       {"conversation_id": p["conversation_id"], "text": p["text"]},
+                                       {"conversation_id": p["conversation_id"], "text": p["text"], "force": force},
                                        capability=self._cap)
+        if kind == "add_to_calendar":
+            # A recruiter's invitation: put it on your calendar as is (no reply, no invites sent, never twice).
+            return await self.hub.call("calendar", "add_invite", {
+                "uid": p.get("uid", ""), "title": p["title"], "start": p["start"], "end": p["end"],
+                "description": p.get("description", ""), "location": p.get("location", ""),
+                "organizer_email": p.get("organizer_email", ""), "organizer_name": p.get("organizer_name", ""),
+            }, capability=self._cap)
         if kind == "create_event":
             check = await self.hub.call("calendar", "check_availability", {
                 "start": p["start"], "end": p["end"], "buffer_minutes": self.cfg.scheduling.buffer_minutes})

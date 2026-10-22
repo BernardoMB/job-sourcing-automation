@@ -68,6 +68,16 @@ h2.sec.high { color: var(--high); }
 .card.high { border-left: 4px solid var(--high); }
 .card.decided { opacity: .85; }
 .card.fresh { outline: 2px solid var(--accent); }
+.card.blocker.error { border-left: 4px solid var(--high); }
+.card.blocker.warn { border-left: 4px solid var(--warn); }
+.card.blocker.info { border-left: 4px solid var(--info); }
+details.dd { position: relative; display: inline-block; }
+details.dd > summary { list-style: none; cursor: pointer; white-space: nowrap; }
+details.dd > summary::-webkit-details-marker { display: none; }
+.dd-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; display: flex; flex-direction: column; gap: 4px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px; box-shadow: var(--shadow); min-width: 130px; }
+.dd-menu .btn { text-align: left; }
+.dd-menu .btn:disabled { opacity: .45; cursor: not-allowed; }
 .card-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
 .card-head h3 { margin: 0; font-size: 16px; flex: 1 1 260px; }
 .meta { color: var(--muted); font-size: 13px; margin-top: 2px; overflow-wrap: anywhere; }
@@ -153,10 +163,12 @@ tr.detail td { background: var(--bg); }
   <nav class="tabs" id="tabs">
     <button data-tab="brief" class="on">Briefing <span class="badge hidden" id="badge"></span></button>
     <button data-tab="tasks">Tasks <span class="badge hidden" id="taskBadge"></span></button>
+    <button data-tab="queue">Queue <span class="badge hidden" id="queueBadge"></span></button>
     <button data-tab="history">Decisions</button>
     <button data-tab="pipeline">Pipeline</button>
     <button data-tab="rules">Rules &amp; learning</button>
     <button data-tab="ledger">Ledger</button>
+    <button data-tab="logs">Logs</button>
     <button data-tab="setup">Setup</button>
   </nav>
 </header>
@@ -165,10 +177,12 @@ tr.detail td { background: var(--bg); }
   <div id="liveBanner" class="banner hidden"><span id="liveText"></span><button class="btn small" id="liveShow">Show</button></div>
   <section id="tab-brief"></section>
   <section id="tab-tasks" class="hidden"></section>
+  <section id="tab-queue" class="hidden"></section>
   <section id="tab-history" class="hidden"></section>
   <section id="tab-pipeline" class="hidden"></section>
   <section id="tab-rules" class="hidden"></section>
   <section id="tab-ledger" class="hidden"></section>
+  <section id="tab-logs" class="hidden"></section>
   <section id="tab-setup" class="hidden"></section>
 </main>
 <div id="toast" class="toast hidden"></div>
@@ -262,7 +276,7 @@ function dataTable(host, cfg) {
     save(); draw();
   }));
   if (cfg.onRow) body.addEventListener("click", (e) => {
-    if (e.target.closest("select, input, button, a")) return;
+    if (e.target.closest("select, input, button, a, details")) return;
     const tr = e.target.closest("tr[data-key]");
     if (!tr) return;
     const next = tr.nextElementSibling;
@@ -287,6 +301,8 @@ async function refresh(force) {
   if (tab === "rules") renderRules();
   if (tab === "history") renderHistory();
   if (tab === "tasks") renderTasks();
+  if (tab === "queue") renderQueue();
+  if (tab === "logs") renderLogs();
 }
 function isEditing() {
   return dirty || !!document.querySelector(".dontask, .override:not(.hidden)") ||
@@ -310,6 +326,9 @@ function renderHeader() {
   badge.textContent = c.undecided; badge.classList.toggle("hidden", !c.undecided);
   const tb = $("#taskBadge"), tn = (c.tasks_open || 0) + (c.tasks_suggested || 0);
   tb.textContent = tn; tb.classList.toggle("hidden", !tn);
+  const qb = $("#queueBadge");
+  qb.textContent = c.in_flight; qb.classList.toggle("hidden", !c.in_flight);
+  qb.title = `${c.in_flight} queued, running, deferred, or failed`;
   tb.title = `${c.tasks_open || 0} open, ${c.tasks_suggested || 0} suggested, ${c.tasks_due_soon || 0} due within 48 h or overdue`;
   document.title = c.undecided ? `(${c.undecided}) Job Sourcer` : "Job Sourcer";
 }
@@ -557,7 +576,7 @@ function renderBrief() {
   const meetings = upcomingItems.map(x => x.html).join("") || `<div class="empty">No job-search meetings or deadlines in the next 7 days.</div>`;
   const stages = Object.entries(B.pipeline.by_stage).filter(([, n]) => n).map(([s, n]) => `<span class="chip">${esc(B.stages[s])}: ${n}</span>`).join(" ") || `<span class="muted">Empty</span>`;
   const fyi = (B.fyi || []).map(f => `<div class="meeting"><b>${esc(f.summary)}</b><span class="meta">${esc(f.source)} · ${esc(f.received)}</span></div>`).join("");
-  const flight = (B.in_flight || []).map(v => `<div class="meeting"><b>${esc(v.summary)}</b><span class="meta">${esc(v.status)}${v.status_reason ? " · " + esc(v.status_reason) : ""}</span></div>`).join("");
+  const flight = (B.in_flight || []).map(v => `<div class="meeting"><b>${esc(v.summary)}</b><span class="meta">${esc(v.status)}${v.status_reason ? " · " + esc(v.status_reason) : ""}</span>${v.status === "deferred" ? ` <button class="btn small primary" data-exec="${v.id}">Execute</button>` : ""}</div>`).join("");
   $("#tab-brief").innerHTML = `
     <div class="strip">
       <div class="stat"><b>${c.undecided}</b><span>need your decision</span></div>
@@ -746,6 +765,78 @@ document.addEventListener("click", (e) => {
   fields.opportunity_id = fields.opportunity_id ? +fields.opportunity_id : null;
   act(() => api(`/api/tasks/${b.dataset.saveTask}`, "POST", { action: "update", fields }), "Task updated.").then(renderTasks);
 });
+
+// ---------- queue ----------
+const when = (iso) => iso ? new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
+const QUEUE_CHIP = { deferred: "warn", failed: "bad", executed: "ok", executing: "info", queued: "info", discarded: "", superseded: "" };
+const queueMenu = (r) => `<details class="dd"><summary class="btn small">Actions ▾</summary><div class="dd-menu">
+  <button class="btn small" data-reexec="${r.id}" ${r.can_reexecute ? "" : "disabled"} title="${r.can_reexecute ? "Run it again now (skips LinkedIn business hours and pacing)" : "Nothing to run: it is done or closed"}">Re-execute</button>
+  <button class="btn small danger" data-discard="${r.id}" ${r.can_discard ? "" : "disabled"} title="${r.can_discard ? "It will not run" : "It is done or closed already"}">Discard</button></div></details>`;
+async function renderQueue() {
+  const { items } = await api("/api/queue");
+  const host = $("#tab-queue");
+  host.innerHTML = `<p class="meta">Every decided action that has not finished, and what finished in the last day. LinkedIn replies wait for business hours (${esc(B.linkedin_hours || "set in steward.yaml")}); <b>Execute</b> sends one now. Click a row for each action's status.</p><div id="queueTable"></div>`;
+  dataTable($("#queueTable"), {
+    id: "queue", rows: items, noun: "actions", defaultSort: { key: "updated", dir: "desc" },
+    columns: [
+      { key: "updated", label: "Updated", value: r => when(r.updated_at), sortValue: r => r.updated_at },
+      { key: "summary", label: "Item", render: r => `<b>${esc(r.summary)}</b><div class="meta">${esc(r.actions.map(a => `${a.type} → ${a.target}`).join(" · "))}</div>` },
+      { key: "channel", label: "Channel", filter: "select" },
+      { key: "status_label", label: "Status", filter: "select", value: r => r.status_label.startsWith("Deferred") ? "Deferred" : r.status_label,
+        render: r => `<span class="chip ${QUEUE_CHIP[r.status] || ""}">${esc(r.status_label)}</span>` },
+      { key: "reason", label: "Why / what's next", filter: "text" },
+      { key: "decided_by", label: "Decided by", filter: "select" },
+      { key: "x", label: "", sort: false, render: r => `<div class="buttons" style="flex-wrap:nowrap">${r.can_execute ? `<button class="btn small primary" data-exec="${r.id}">Execute</button>` : ""}${queueMenu(r)}</div>` },
+    ],
+    empty: "Nothing is queued. Decided actions appear here until they are done.",
+    onRow: r => r.actions.map(a => `<div class="meta"><b>${esc(a.type)}</b> → ${esc(a.target)} · ${esc(label(a.status))}${a.error ? " · " + esc(a.error) : ""}</div>`).join("") || `<div class="meta">No actions.</div>`,
+  });
+}
+const queueResult = (r) => r.status === "executed" ? (r.reason ? `Executed. ${r.reason}` : "Executed.")
+  : r.status === "discarded" ? r.reason : `${label(r.status)}: ${r.reason || "see Logs"}`;
+document.addEventListener("click", async (ev) => {
+  const re = ev.target.closest("[data-reexec]"), di = ev.target.closest("[data-discard]");
+  if (!re && !di) { document.querySelectorAll("details.dd[open]").forEach(d => { if (!d.contains(ev.target)) d.open = false; }); return; }
+  const b = re || di, menu = b.closest("details");
+  if (menu) menu.open = false;
+  if (re && !confirm("Re-execute it now? It skips Job Sourcer's LinkedIn business hours and pacing. If it may already have gone out, check the conversation first.")) return;
+  if (di && !confirm("Discard it? It will not be sent or done.")) return;
+  await act(() => api(`/api/drafts/${b.dataset.reexec || b.dataset.discard}/${re ? "reexecute" : "discard"}`, "POST", {}), queueResult);
+});
+document.addEventListener("click", async (ev) => {
+  const b = ev.target.closest("[data-exec]");
+  if (!b) return;
+  if (!confirm("Execute it now? This skips Job Sourcer's LinkedIn business hours and pacing for this one item.")) return;
+  b.disabled = true; b.textContent = "Executing…";
+  await act(() => api(`/api/drafts/${b.dataset.exec}/execute`, "POST", {}), queueResult);
+});
+
+// ---------- logs ----------
+async function renderLogs() {
+  const { entries, blockers } = await api("/api/logs");
+  const host = $("#tab-logs");
+  const problems = blockers.filter(b => b.level !== "info").length;
+  host.innerHTML = `<h2 class="sec">What's blocking right now <span class="count">${problems}</span></h2>
+    ${blockers.length ? blockers.map(b => `<div class="card blocker ${b.level}"><b>${esc(b.title)}</b><div class="meta">${esc(b.detail || "")}</div>
+      ${b.can_execute ? `<div class="buttons"><button class="btn small primary" data-exec="${b.draft_id}">Execute</button></div>` : ""}
+      ${b.can_reexecute ? `<div class="buttons"><button class="btn small primary" data-reexec="${b.draft_id}">Re-execute</button> <button class="btn small danger" data-discard="${b.draft_id}">Discard</button></div>` : ""}
+      ${b.go ? `<div class="buttons"><button class="btn small" data-go-now>Go</button></div>` : ""}</div>`).join("")
+      : `<div class="card"><b>Nothing is blocked.</b><div class="meta">Every decided action has run.</div></div>`}
+    <h2 class="sec">Activity</h2>
+    <p class="meta">Every check (and what triggered it), every new message and why one was ignored, every action and its outcome. Newest first.</p>
+    <div id="logTable"></div>`;
+  dataTable($("#logTable"), {
+    id: "logs", rows: entries, noun: "log lines", defaultSort: { key: "at", dir: "desc" },
+    columns: [
+      { key: "at", label: "When", value: r => when(r.at), sortValue: r => r.at },
+      { key: "level", label: "Level", filter: "select", render: r => `<span class="chip ${r.level === "error" ? "bad" : r.level === "warn" ? "warn" : ""}">${esc(r.level)}</span>` },
+      { key: "kind", label: "Kind", filter: "select" },
+      { key: "message", label: "What happened", filter: "text" },
+    ],
+    empty: "Nothing logged yet. The first check writes here within a minute.",
+  });
+}
+document.addEventListener("click", (ev) => { if (ev.target.closest("[data-go-now]")) $("#goBtn").click(); });
 
 // ---------- decisions history ----------
 async function renderHistory() {

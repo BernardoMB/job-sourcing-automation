@@ -87,6 +87,8 @@ class MailConfig(BaseModel):
     from_name: str = ""
     folder: str = "INBOX"
     save_sent_folder: str = ""
+    # Where your own sent mail is (to notice replies you wrote yourself). Empty = find it automatically.
+    sent_folder: str = ""
     initial_lookback_days: int = 7
     max_per_poll: int = 40
     prefilter: Literal["keywords", "all"] = "keywords"

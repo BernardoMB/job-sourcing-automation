@@ -20,8 +20,9 @@ from email.utils import formataddr, getaddresses, make_msgid, parseaddr, parseda
 from html import unescape
 from typing import Any
 
+from steward import invites
 from steward.servers.common import READ_ONLY_REMOTE, WRITE, JsonStore, guarded, make_server, server_config
-from steward.timeutil import now_iso, to_iso, utcnow
+from steward.timeutil import now_iso, parse_iso, to_iso, utcnow
 
 cfg = server_config()
 mail_cfg = cfg.mail
@@ -60,18 +61,35 @@ class SandboxMail:
     def address(self) -> str:
         return cfg.profile.email or "me@example.com"
 
+    @staticmethod
+    def _read(m: dict[str, Any]) -> dict[str, Any]:
+        """Sandbox messages may carry raw `ics` text and `html`; read invites from them like real mail."""
+        if "ics" not in m and "html" not in m:
+            return m
+        ics = m.get("ics") or []
+        found = invites.extract([ics] if isinstance(ics, str) else ics, m.get("html", ""), m.get("body_text", ""),
+                                cfg.profile.timezone)
+        rest = {k: v for k, v in m.items() if k not in ("ics", "html")}
+        return {**rest, "has_calendar_invite": bool(ics or found["invites"]), **found}
+
     def list(self, folder: str, since_uid: int, limit: int) -> list[dict[str, Any]]:
-        msgs = [m for m in self.inbox.load()["messages"] if int(m["uid"]) > since_uid]
+        msgs = [self._read(m) for m in self.inbox.load()["messages"] if int(m["uid"]) > since_uid]
         return sorted(msgs, key=lambda m: int(m["uid"]))[:limit]
 
     def get(self, uid: int, folder: str) -> dict[str, Any] | None:
-        return next((m for m in self.inbox.load()["messages"] if int(m["uid"]) == uid), None)
+        m = next((m for m in self.inbox.load()["messages"] if int(m["uid"]) == uid), None)
+        return self._read(m) if m else None
 
     def search(self, query: str, folder: str, limit: int) -> list[dict[str, Any]]:
         q = query.lower()
         msgs = [m for m in self.inbox.load()["messages"]
                 if q in (m.get("subject", "") + m.get("body_text", "") + m.get("from_email", "")).lower()]
         return msgs[:limit]
+
+    def sent(self, since_uid: int, since_date: str) -> tuple[str, list[dict[str, Any]]]:
+        """Mail you sent yourself (the sandbox keeps it under `sent_by_me` in mailbox.json)."""
+        mine = self.inbox.load().get("sent_by_me", [])
+        return "Sent", sorted((m for m in mine if int(m["uid"]) > since_uid), key=lambda m: int(m["uid"]))
 
     def send(self, msg: EmailMessage) -> None:
         data = self.outbox.load()
@@ -115,13 +133,21 @@ class ImapMail:
         if body_part is not None:
             content = body_part.get_content()
             body = _html_to_text(content) if body_part.get_content_type() == "text/html" else content
+        html_part = msg.get_body(preferencelist=("html",))
+        html = html_part.get_content() if html_part is not None else ""
+        ics_texts = []
+        for part in msg.walk():
+            name = (part.get_filename() or "").lower()
+            if part.get_content_type() in ("text/calendar", "application/ics") or name.endswith(".ics"):
+                payload = part.get_payload(decode=True) or b""
+                ics_texts.append(payload.decode(part.get_content_charset() or "utf-8", errors="replace"))
         name, addr = parseaddr(str(msg.get("From", "")))
         try:
             date = to_iso(parsedate_to_datetime(str(msg.get("Date"))))
         except (TypeError, ValueError):
             date = now_iso()
         refs = str(msg.get("References", "") or "").split()
-        has_invite = any(part.get_content_type() == "text/calendar" for part in msg.walk())
+        found = invites.extract(ics_texts, html, body, cfg.profile.timezone)
         return {
             "uid": uid,
             "folder": folder,
@@ -135,7 +161,10 @@ class ImapMail:
             "body_text": _strip_quoted(body)[:20000],
             "in_reply_to": str(msg.get("In-Reply-To", "") or "").strip(),
             "references": refs,
-            "has_calendar_invite": has_invite,
+            "has_calendar_invite": bool(ics_texts or found["invites"]),
+            "invites": found["invites"],
+            "add_to_calendar": found["add_to_calendar"],
+            "links": found["links"],
         }
 
     def list(self, folder: str, since_uid: int, limit: int) -> list[dict[str, Any]]:
@@ -189,6 +218,53 @@ class ImapMail:
         finally:
             conn.logout()
 
+    def _sent_folder(self, conn: imaplib.IMAP4_SSL) -> str:
+        if mail_cfg.sent_folder:
+            return mail_cfg.sent_folder
+        typ, rows = conn.list()
+        for row in rows or []:
+            line = row.decode("utf-8", errors="replace") if isinstance(row, bytes) else str(row)
+            if "\\Sent" in line:
+                m = re.search(r'"([^"]+)"\s*$', line) or re.search(r"(\S+)\s*$", line)
+                if m:
+                    return m.group(1)
+        return "[Gmail]/Sent Mail" if "gmail" in mail_cfg.imap_host else "Sent"
+
+    def sent(self, since_uid: int, since_date: str) -> tuple[str, list[dict[str, Any]]]:
+        """Headers of mail you sent (newest UIDs first fetched), to notice replies written outside Job Sourcer."""
+        conn = self._imap()
+        try:
+            folder = self._sent_folder(conn)
+            conn.select(self._quote(folder), readonly=True)
+            if since_uid <= 0:
+                typ, data = conn.uid("SEARCH", None, "SINCE", since_date)
+            else:
+                typ, data = conn.uid("SEARCH", None, "UID", f"{since_uid + 1}:*")
+            uids = sorted(int(u) for u in (data[0] or b"").split() if int(u) > since_uid)[-200:]
+            out = []
+            for uid in uids:
+                typ, parts = conn.uid("FETCH", str(uid), "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID TO CC SUBJECT DATE "
+                                                       "IN-REPLY-TO REFERENCES)])")
+                raw = next((p[1] for p in parts if isinstance(p, tuple)), None)
+                if not raw:
+                    continue
+                h = email.message_from_bytes(raw, policy=default_policy)
+                try:
+                    date = to_iso(parsedate_to_datetime(str(h.get("Date"))))
+                except (TypeError, ValueError):
+                    date = now_iso()
+                out.append({"uid": uid, "message_id": str(h.get("Message-ID", "") or "").strip(),
+                            "to": [a.lower() for _, a in getaddresses([str(h.get("To", "")), str(h.get("Cc", ""))])],
+                            "subject": str(h.get("Subject", "") or ""), "date": date,
+                            "in_reply_to": str(h.get("In-Reply-To", "") or "").strip(),
+                            "references": str(h.get("References", "") or "").split()})
+            return folder, out
+        finally:
+            try:
+                conn.logout()
+            except Exception:  # noqa: BLE001
+                pass
+
     def send(self, msg: EmailMessage) -> None:
         if mail_cfg.smtp_starttls:
             with smtplib.SMTP(mail_cfg.smtp_host, mail_cfg.smtp_port, timeout=60) as s:
@@ -236,6 +312,16 @@ def list_messages(folder: str = "", since_uid: int = 0, limit: int = 40) -> dict
     msgs = backend().list(folder or mail_cfg.folder, since_uid, min(limit, mail_cfg.max_per_poll))
     last = max([since_uid, *[int(m["uid"]) for m in msgs]])
     return {"messages": msgs, "last_uid": last}
+
+
+@mcp.tool(annotations=READ_ONLY_REMOTE)
+@guarded
+def list_sent(since_uid: int = 0, since: str = "") -> dict[str, Any]:
+    """Headers of mail you sent (from your Sent folder) with UID greater than `since_uid`, or since a date when
+    `since_uid` is 0. Used to notice replies you wrote yourself."""
+    day = (parse_iso(since) or (utcnow() - timedelta(days=mail_cfg.initial_lookback_days))).strftime("%d-%b-%Y")
+    folder, msgs = backend().sent(since_uid, day)
+    return {"folder": folder, "messages": msgs, "last_uid": max([since_uid, *[int(m["uid"]) for m in msgs]])}
 
 
 @mcp.tool(annotations=READ_ONLY_REMOTE)

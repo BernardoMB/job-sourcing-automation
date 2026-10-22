@@ -56,7 +56,9 @@ def add(cfg: Config, db: Database, ledger: Ledger, title: str, *, details: str =
 
 def suggest_from_classification(cfg: Config, db: Database, ledger: Ledger, cls: dict[str, Any], event_id: int,
                                 opportunity_id: int | None) -> list[int]:
-    """Turn 'please complete this assessment by Friday' into a suggested task (not duplicated)."""
+    """Turn 'please fill in this form by Friday' into a suggested task (not duplicated).
+
+    Assessments skip the suggestion step: they become open tasks right away, so their deadline is never missed."""
     created = []
     for t in cls.get("candidate_tasks", []) or []:
         title = (t.get("title") or "").strip()
@@ -65,12 +67,23 @@ def suggest_from_classification(cfg: Config, db: Database, ledger: Ledger, cls: 
         dup = db.query_one(
             "SELECT id FROM tasks WHERE lower(title) = ? AND ifnull(opportunity_id, 0) = ? AND status != 'dismissed'",
             (title.lower(), opportunity_id or 0))
+        assessment = t.get("kind") == "assessment"
+        if assessment and not dup:  # the assessment detector may already have recorded it from this email
+            dup = db.query_one("SELECT * FROM tasks WHERE kind = 'assessment' AND status != 'dismissed' AND "
+                               "event_id = ?", (event_id,))
+            if dup:  # it read the page; the classifier may have read a deadline or link it missed
+                fill = {k: v for k, v in (("due_at", t.get("due")), ("link", t.get("link"))) if v and not dup[k]}
+                if fill:
+                    try:
+                        act(cfg, db, ledger, dup["id"], "update", fill)
+                    except TaskError:
+                        pass
         if dup:
             continue
         try:
             created.append(add(cfg, db, ledger, title, details=t.get("details", ""), kind=t.get("kind", "other"),
                                link=t.get("link", ""), due_at=t.get("due") or None, opportunity_id=opportunity_id,
-                               origin="steward", status="suggested", event_id=event_id))
+                               origin="steward", status="open" if assessment else "suggested", event_id=event_id))
         except TaskError:
             continue
     return created
