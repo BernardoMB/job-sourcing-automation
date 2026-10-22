@@ -8,6 +8,7 @@ Job Sourcer starts the bridge once, restarts it if it stops, and talks to it ove
 
 from __future__ import annotations
 
+import json
 import shutil
 import socket
 import subprocess
@@ -22,7 +23,19 @@ from steward.config import Config
 _process: subprocess.Popen | None = None
 _last_start = 0.0
 RESTART_BACKOFF_SECONDS = 60
-EXTENSION_FILE = Path.home() / ".linkedin-toolkit" / "extension" / "src" / "background" / "voyager.js"
+EXTENSION_DIR = Path.home() / ".linkedin-toolkit" / "extension"
+EXTENSION_FILE = EXTENSION_DIR / "src" / "background" / "voyager.js"
+
+
+def extension_version_on_disk() -> str:
+    """The version in the installed extension's manifest ('' when not installed in its default folder).
+
+    The browser keeps running the version it last loaded until the extension is reloaded, so a
+    different version here than the one the toolkit reports means a patch is installed but not active."""
+    try:
+        return str(json.loads((EXTENSION_DIR / "manifest.json").read_text(encoding="utf-8")).get("version", ""))
+    except (OSError, ValueError):
+        return ""
 
 
 def extension_patched() -> bool | None:

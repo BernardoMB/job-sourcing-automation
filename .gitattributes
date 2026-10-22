@@ -1,0 +1,2 @@
+# Patches for third-party files are applied byte for byte: no CRLF conversion, or they stop applying.
+patches/** -text

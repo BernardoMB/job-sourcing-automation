@@ -151,6 +151,11 @@ def _toolkit_error(logical: str, tool: str, text: str) -> str:
     if err.get("code") == "EXTENSION_OFFLINE":
         return ("The LinkedIn Toolkit extension isn't connected to its bridge. Make sure Microsoft Edge (or the "
                 "browser where you installed the extension) is open and the extension badge says 'connected'.")
+    if "RECIPIENT_NOT_FIRST_DEGREE_CONNECTION" in text:
+        return ("LinkedIn refused: this person is not one of your connections, and the toolkit found no earlier "
+                "conversation with them to reply in (LinkedIn only allows new messages to connections). Reply from "
+                "LinkedIn yourself, or connect with them first. Check that the extension has the send fix "
+                "(patches/linkedin-toolkit-2.1.1) and was reloaded.")
     if err.get("message"):
         return f"LinkedIn toolkit ({tool}): {err['message']} {err.get('howToFix', '')}".strip()
     return f"upstream {logical} ({tool}) failed: {text[:300]}"

@@ -47,6 +47,12 @@ def assess(cfg, db, probe: dict[str, Any]) -> dict[str, Any]:
         problems.append(("error", f"Reading the inbox failed: {probe['read_error']}"))
 
     patched = linkedin_bridge.extension_patched()
+    on_disk, running = linkedin_bridge.extension_version_on_disk(), str(status.get("extensionVersion") or "")
+    stale = bool(on_disk and running and on_disk != running)
+    if stale:
+        problems.append(("error", f"Edge is still running the extension's version {running}, but version {on_disk} is "
+                                  "installed (the send fix is not active yet): open edge://extensions, turn on "
+                                  "Developer mode, and click Reload on LinkedIn Toolkit."))
     used, cap = _quota((status.get("quotas") or {}).get("message"))
     left = max(cap - used, 0) if cap else None
     send_notes = [("Autopilot: approved replies go out directly" if status.get("autopilot") else
@@ -65,7 +71,7 @@ def assess(cfg, db, probe: dict[str, Any]) -> dict[str, Any]:
                                   "README), then click the toolkit icon once."))
     if left == 0:
         problems.append(("warn", "Today's LinkedIn message quota is used up: replies wait until tomorrow."))
-    can_send = bool(status.get("connected", True) and status.get("loggedIn")) and patched is not False and left != 0
+    can_send = bool(status.get("connected", True) and status.get("loggedIn")) and patched is not False and left != 0         and not stale
     other = [f"{name} {u}/{c}" for name, (u, c) in (
         ("invites", _quota((status.get("quotas") or {}).get("invite"))),
         ("profile visits", _quota((status.get("quotas") or {}).get("visit"))),

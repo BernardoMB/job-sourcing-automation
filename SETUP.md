@@ -163,10 +163,11 @@ local bridge). Node.js is already installed on this computer.
 6. The toolkit queues every send for its own approval (Copilot mode). Either approve those in its popup, or turn
    on its **Autopilot** in the popup so the replies you already approved in Job Sourcer go out at its human pace.
 
-**Apply the send fix.** linkedin-toolkit 2.1.1 cannot send messages as released (LinkedIn answers `400`). Apply
-[`patches/linkedin-toolkit-2.1.1`](patches/linkedin-toolkit-2.1.1/README.md) to the extension, then click the toolkit
-icon once (the popup closes while the extension reloads). Re-apply it whenever you re-run the toolkit's setup;
-Setup step 6 warns when the installed extension is not patched.
+**Apply the send fix.** linkedin-toolkit 2.1.1 cannot send messages as released. Apply
+[`patches/linkedin-toolkit-2.1.1`](patches/linkedin-toolkit-2.1.1/README.md) to the extension, then in
+`edge://extensions` turn on **Developer mode** and click **Reload** on LinkedIn Toolkit (the card then shows version
+2.1.1.4; Edge keeps running the old code until you do, even across restarts). Re-apply it whenever you re-run the
+toolkit's setup. The LinkedIn check in the Logs tab warns when the patch is missing or not reloaded yet.
 
 **Job Sourcer runs the toolkit's bridge for you.** The extension connects to a long-running local bridge
 (`lit serve --http`, on 127.0.0.1 ports 47829/47830). Job Sourcer starts it when it starts, restarts it if it stops,

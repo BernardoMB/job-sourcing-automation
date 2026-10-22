@@ -58,6 +58,7 @@ def _upstream(workspace, tmp_path, monkeypatch, **env) -> Steward:
 
 def test_linkedin_is_checked_at_startup_and_logged(workspace, tmp_path, monkeypatch):
     monkeypatch.setattr(linkedin_bridge, "extension_patched", lambda: True)
+    monkeypatch.setattr(linkedin_bridge, "extension_version_on_disk", lambda: "2.1.1")  # what the fake runs
     s = _upstream(workspace, tmp_path, monkeypatch)
     res = run(linkedin_health.check(s, "startup"))
     assert res["read_ok"] and res["can_send"] and res["problems"] == []
@@ -70,6 +71,7 @@ def test_linkedin_is_checked_at_startup_and_logged(workspace, tmp_path, monkeypa
 
 def test_linkedin_problems_are_logged_and_block(workspace, tmp_path, monkeypatch):
     monkeypatch.setattr(linkedin_bridge, "extension_patched", lambda: False)
+    monkeypatch.setattr(linkedin_bridge, "extension_version_on_disk", lambda: "")
     s = _upstream(workspace, tmp_path, monkeypatch, FAKE_LI_SIGNED_OUT="1", FAKE_LI_MODE="copilot")
     res = run(linkedin_health.check(s, "startup"))
     assert res["read_ok"] and not res["can_send"]
@@ -93,3 +95,24 @@ def test_check_now_button_and_sandbox(workspace):
         msgs = [e["message"] for e in client.get("/api/logs").json()["entries"]]
         expected = "LinkedIn check (you pressed Check LinkedIn now): LinkedIn is sandbox (demo data)."
         assert expected in msgs
+
+
+def test_a_patch_edge_has_not_reloaded_is_reported(workspace, tmp_path, monkeypatch):
+    # The fix is on disk (2.1.1.4) but Edge still runs what it loaded before (2.1.1): sending is not ready.
+    monkeypatch.setattr(linkedin_bridge, "extension_patched", lambda: True)
+    monkeypatch.setattr(linkedin_bridge, "extension_version_on_disk", lambda: "2.1.1.4")
+    s = _upstream(workspace, tmp_path, monkeypatch)
+    res = run(linkedin_health.check(s, "startup"))
+    assert res["read_ok"] and not res["can_send"]
+    assert any("click Reload on LinkedIn Toolkit" in p and "2.1.1.4" in p for _, p in res["problems"])
+    s.db.close()
+
+
+def test_not_a_connection_is_explained():
+    from steward.servers import linkedin as li_server
+
+    raw = ('{"error":{"code":"LINKEDIN_ERROR","message":"LinkedIn said: Voyager API error 422: '
+           '{\\"code\\":\\"RECIPIENT_NOT_FIRST_DEGREE_CONNECTION\\"}"}}')
+    text = li_server._toolkit_error("send_message", "linkedin_send_message", raw)
+    assert text.startswith("LinkedIn refused: this person is not one of your connections")
+    assert "Reply from LinkedIn yourself" in text
