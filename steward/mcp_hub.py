@@ -38,6 +38,7 @@ EXECUTOR_ONLY = {
     ("calendar", "create_event"),
     ("calendar", "rsvp_event"),
     ("calendar", "add_invite"),
+    ("mail", "file_message"),
     ("linkedin", "toolkit_queue_decide"),
     ("linkedin", "send_message"),
 }

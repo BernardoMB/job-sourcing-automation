@@ -89,6 +89,9 @@ class MailConfig(BaseModel):
     save_sent_folder: str = ""
     # Where your own sent mail is (to notice replies you wrote yourself). Empty = find it automatically.
     sent_folder: str = ""
+    # "Thank you for applying" emails that ask nothing of you: marked as read and moved to this label.
+    file_application_acks: bool = True
+    applications_label: str = "Jobs"
     initial_lookback_days: int = 7
     max_per_poll: int = 40
     prefilter: Literal["keywords", "all"] = "keywords"

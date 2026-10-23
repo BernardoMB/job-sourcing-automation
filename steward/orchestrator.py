@@ -16,7 +16,7 @@ import re
 from datetime import timedelta
 from typing import Any
 
-from steward import (activity, assessments, channels, decisions, linkedin_bridge, notify, pipeline, priority,
+from steward import (acknowledgments, activity, assessments, channels, decisions, linkedin_bridge, notify, pipeline, priority,
                      reconcile, sound)
 from steward import tasks as tasks_mod
 from steward.agents import classifier, cv_analyst, drafter, fewshot, instructor, scheduler
@@ -28,7 +28,7 @@ from steward.db import Database, dumps, loads
 from steward.executor import Executor
 from steward.ledger import Ledger
 from steward.llm import LLMError, LLMRefusal, LLMUnavailable, get_llm
-from steward.mcp_hub import IntegrationDisabled, MCPHub, MCPToolError
+from steward.mcp_hub import ExecutorCapability, IntegrationDisabled, MCPHub, MCPToolError
 from steward.taxonomy import ACTIVE_STAGES, risk_of
 from steward.timeutil import days_between, fmt_local, fmt_range, now_iso, parse_iso, to_iso, utcnow
 from steward.work_queue import queue_actions
@@ -467,7 +467,10 @@ class Steward:
             known_thread = self.db.query_one("SELECT 1 FROM opportunity_threads WHERE thread_key = ?", (thread_key,))
             known_sender = self.db.query_one("SELECT 1 FROM opportunities WHERE lower(recruiter_email) = ?", (sender,))
             why = None
-            if channels.is_linkedin_address(sender):
+            if self.cfg.mail.file_application_acks and acknowledgments.is_application_ack(msg):
+                # "Thank you for applying": nothing to answer or do. Read, filed, no AI call.
+                why = await self._file_application_ack(hub, msg)
+            elif channels.is_linkedin_address(sender):
                 # Never answered by email. A message notification means: read and answer it on LinkedIn, now.
                 notice = channels.is_linkedin_message_notice(sender, subject, body)
                 if notice and self.cfg.linkedin.backend != "disabled":
@@ -495,6 +498,16 @@ class Steward:
                                 + (f". {why}" if why else ""), event_id=event_id)
         self.db.kv_set("mail:last_uid", res.get("last_uid", since))
         return count
+
+    async def _file_application_ack(self, hub: MCPHub, msg: dict[str, Any]) -> str:
+        label = self.cfg.mail.applications_label
+        try:
+            await hub.call("mail", "file_message", {"uid": int(msg["uid"]), "folder": msg.get("folder", ""),
+                                                    "label": label, "mark_read": True},
+                           capability=ExecutorCapability())
+            return f"Application acknowledgment: marked as read and moved to {label} (nothing to answer or do)."
+        except (MCPToolError, KeyError, ValueError) as exc:
+            return f"Application acknowledgment (nothing to answer or do), but it could not be moved to {label}: {exc}"
 
     async def ingest_linkedin(self, hub: MCPHub) -> int:
         since = self.db.kv_get("linkedin:since", "")

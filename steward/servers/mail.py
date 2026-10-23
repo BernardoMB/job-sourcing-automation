@@ -91,6 +91,17 @@ class SandboxMail:
         mine = self.inbox.load().get("sent_by_me", [])
         return "Sent", sorted((m for m in mine if int(m["uid"]) > since_uid), key=lambda m: int(m["uid"]))
 
+    def file(self, uid: int, folder: str, label: str, mark_read: bool) -> dict[str, Any]:
+        data = self.inbox.load()
+        for m in data["messages"]:
+            if int(m["uid"]) == uid:
+                m["seen"] = m.get("seen") or mark_read
+                m["labels"] = sorted(set(m.get("labels", [])) | {label})
+                m["in_inbox"] = False
+                self.inbox.save(data)
+                return {"status": "filed", "label": label}
+        raise ValueError(f"No message with UID {uid}")
+
     def send(self, msg: EmailMessage) -> None:
         data = self.outbox.load()
         data["sent"].append(
@@ -265,6 +276,30 @@ class ImapMail:
             except Exception:  # noqa: BLE001
                 pass
 
+    def file(self, uid: int, folder: str, label: str, mark_read: bool) -> dict[str, Any]:
+        """Mark a message as read and move it to `label` (a Gmail label is a folder over IMAP)."""
+        conn = self._imap()
+        try:
+            conn.create(self._quote(label))  # answers NO when it already exists: fine
+            typ, _ = conn.select(self._quote(folder))
+            if typ != "OK":
+                raise RuntimeError(f"Could not open {folder}")
+            if mark_read:
+                conn.uid("STORE", str(uid), "+FLAGS", r"(\Seen)")
+            typ, data = conn.uid("MOVE", str(uid), self._quote(label))
+            if typ != "OK":  # servers without MOVE: copy, then remove from the folder
+                typ, data = conn.uid("COPY", str(uid), self._quote(label))
+                if typ != "OK":
+                    raise RuntimeError(f"Could not move the message to {label}: {data}")
+                conn.uid("STORE", str(uid), "+FLAGS", r"(\Deleted)")
+                conn.expunge()
+            return {"status": "filed", "label": label}
+        finally:
+            try:
+                conn.logout()
+            except Exception:  # noqa: BLE001
+                pass
+
     def send(self, msg: EmailMessage) -> None:
         if mail_cfg.smtp_starttls:
             with smtplib.SMTP(mail_cfg.smtp_host, mail_cfg.smtp_port, timeout=60) as s:
@@ -312,6 +347,13 @@ def list_messages(folder: str = "", since_uid: int = 0, limit: int = 40) -> dict
     msgs = backend().list(folder or mail_cfg.folder, since_uid, min(limit, mail_cfg.max_per_poll))
     last = max([since_uid, *[int(m["uid"]) for m in msgs]])
     return {"messages": msgs, "last_uid": last}
+
+
+@mcp.tool(annotations=WRITE)
+@guarded
+def file_message(uid: int, label: str = "", mark_read: bool = True, folder: str = "") -> dict[str, Any]:
+    """Mark a message as read and move it to a label/folder (e.g. Jobs). Executor only."""
+    return backend().file(uid, folder or mail_cfg.folder, label or mail_cfg.applications_label, mark_read)
 
 
 @mcp.tool(annotations=READ_ONLY_REMOTE)

@@ -95,6 +95,10 @@ before any AI call. If you prefer, create a Gmail filter that labels recruiter m
 
 - **Replies go back on the channel the message came from**: an email gets an email reply, a LinkedIn message a
   LinkedIn reply.
+- **"Thank you for applying" emails are filed**: a company only confirming it received your application is
+  marked as read and moved to your **Jobs** label (no AI call, no draft). One that also asks something of you (a
+  video interview, an assessment, scheduling), turns you down, or makes an offer goes through the normal flow.
+  Settings: `mail.file_application_acks`, `mail.applications_label`.
 - **Mail from LinkedIn is never answered by email** (message and InMail notifications, job alerts, digests). When
   one says someone messaged you, Job Sourcer checks LinkedIn right away and drafts the reply there.
 - **Recruiters' meeting invitations go on your calendar right away, without asking**: an invitation file (`.ics`,
