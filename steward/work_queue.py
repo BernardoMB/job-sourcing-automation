@@ -30,6 +30,29 @@ def queue_actions(db: Database, draft: dict[str, Any]) -> dict[str, bool]:
     return {"can_reexecute": live, "can_discard": live}
 
 
+def _due(next_attempt_at: str | None) -> bool:
+    nxt = parse_iso(next_attempt_at)
+    return nxt is None or nxt <= utcnow()
+
+
+def go_counts(db: Database) -> dict[str, int]:
+    """What pressing Go runs right now (decisions pending confirmation, queued items, deferred items whose
+    time has come), and what it does not: deferred items still waiting for their time, and failed ones
+    (Go never retries a failure; Re-execute or Discard it)."""
+    staged = db.scalar(f"SELECT COUNT(*) FROM drafts WHERE status IN {STAGED}") or 0
+    queued = db.scalar("SELECT COUNT(*) FROM drafts WHERE status = 'queued'") or 0
+    due = waiting = 0
+    for d in db.query("SELECT id FROM drafts WHERE status = 'deferred'"):
+        row = db.query_one("SELECT next_attempt_at FROM executions WHERE draft_id = ? AND status = 'deferred' "
+                           "ORDER BY id DESC LIMIT 1", (d["id"],))
+        if _due(row["next_attempt_at"] if row else None):
+            due += 1
+        else:
+            waiting += 1
+    failed = db.scalar("SELECT COUNT(*) FROM drafts WHERE status = 'failed'") or 0
+    return {"ready_to_go": staged + queued + due, "deferred_waiting": waiting, "needs_attention": failed}
+
+
 def _target(action: dict[str, Any]) -> str:
     p = action.get("payload") or {}
     if action["type"] == "send_email":
@@ -86,8 +109,28 @@ def items(cfg: Config, db: Database) -> list[dict[str, Any]]:
                  "status": (execs.get(i) or {}).get("status", "not started"),
                  "error": (execs.get(i) or {}).get("error") or ""} for i, a in enumerate(actions)],
             "can_execute": status == "deferred", **queue_actions(db, d),
+            **_go_group(status, label, nxt, actions),
         })
     return out
+
+
+def _go_group(status: str, label: str, nxt: str | None, actions: list[dict[str, Any]]) -> dict[str, str]:
+    """Which part of the Queue tab an item belongs to, and what pressing Go will do with it."""
+    what = ", ".join(f"{ACTION_LABELS.get(a['type'], a['type']).lower()} to {_target(a)}" for a in actions) or "nothing"
+    if status == "rejected":
+        return {"group": "ready", "go_will": "Record your rejection. Nothing is sent."}
+    if label == PENDING or status == "queued":
+        return {"group": "ready", "go_will": f"Run: {what}."}
+    if status == "deferred":
+        return ({"group": "ready", "go_will": f"Retry now (its wait is over): {what}."} if _due(nxt) else
+                {"group": "waiting", "go_will": "Nothing yet: it waits for its time (or press Execute)."})
+    if status == "failed":
+        return {"group": "attention", "go_will": "Nothing: Go never retries a failure. Re-execute or Discard it."}
+    if status in ("executing",) or label == "Waiting in the LinkedIn toolkit":
+        return {"group": "waiting", "go_will": "Nothing: it is already on its way."}
+    if status in ("discarded", "superseded"):
+        return {"group": "closed", "go_will": ""}
+    return {"group": "done", "go_will": ""}
 
 
 def blockers(cfg: Config, db: Database) -> list[dict[str, Any]]:

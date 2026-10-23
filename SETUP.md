@@ -240,9 +240,12 @@ Turn this on so Job Sourcer keeps watching even when its window is closed. Turni
   and two hours before (if notifications are on), and items with close deadlines move up the queue. Due times use
   the time zone from your profile.
 - Join the meetings it books (they appear under *Upcoming meetings & deadlines* with join links).
-- **Queue tab**: every decision and action that has not finished: *Pending confirmation* (decided in the briefing,
-  waiting for you to press **Go**, which the Queue tab also offers), queued, running, deferred, failed, waiting in
-  the LinkedIn toolkit, and what finished or was closed in the last days. The tab's badge counts them. LinkedIn replies wait for
+- **Queue tab**, in sections:
+  - **Ready to go**: exactly what **Go** runs. That is decisions you made in the briefing (*Pending
+    confirmation*), queued items, and deferred items whose wait is over. The Go button counts only these.
+  - **Needs your attention**: failed items. Go never retries a failure, so Re-execute or Discard each one.
+  - **Waiting**: deferred until their time, or already on their way.
+  - **Everything in the queue**: the full table, with what finished or was closed in the last days. LinkedIn replies wait for
   `linkedin.business_hours`; **Execute** on a deferred item sends it now. Each item has **Actions ▾**:
   **Re-execute** runs it again now (a failed one, or one the LinkedIn toolkit failed or still holds), and
   **Discard** drops it for good (status *Discarded*; one waiting in the toolkit is rejected there too). The

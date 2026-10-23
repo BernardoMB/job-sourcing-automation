@@ -40,7 +40,10 @@ def test_decisions_wait_in_the_queue_as_pending_confirmation(workspace):
         assert "Press Go" in q[approve]["reason"] and "nothing will be sent" in q[reject]["reason"]
         blockers = client.get("/api/logs").json()["blockers"]
         assert any(x["title"] == "2 decisions pending confirmation" and x.get("go") for x in blockers)
-        assert client.get("/api/briefing").json()["counts"]["staged"] == 2  # the Queue badge counts these
+        counts = client.get("/api/briefing").json()["counts"]
+        assert counts["staged"] == 2 and counts["ready_to_go"] == 2  # the Queue badge and the Go button count these
+        assert q[approve]["group"] == q[reject]["group"] == "ready"  # the Queue tab's "Ready to go" section
+        assert q[approve]["go_will"].startswith("Run: ") and q[reject]["go_will"].startswith("Record your rejection")
 
         client.post("/api/go", headers=h)  # Go: they start processing and leave "Pending confirmation"
         q = {x["id"]: x for x in client.get("/api/queue").json()["items"]}
@@ -116,3 +119,18 @@ def test_not_a_connection_is_explained():
     text = li_server._toolkit_error("send_message", "linkedin_send_message", raw)
     assert text.startswith("LinkedIn refused: this person is not one of your connections")
     assert "Reply from LinkedIn yourself" in text
+
+
+def test_go_counts_only_what_it_runs(steward):
+    from steward import briefing, work_queue
+
+    run(steward.cycle(force=True))
+    pending = steward.db.query("SELECT id FROM drafts WHERE status = 'pending' ORDER BY id")
+    failed, queued = pending[0]["id"], pending[1]["id"]
+    steward.db.update("drafts", failed, {"status": "failed", "status_reason": "send failed"})
+    steward.db.update("drafts", queued, {"status": "queued"})
+    counts = briefing.build(steward.cfg, steward.db)["counts"]
+    assert counts["ready_to_go"] == 1 and counts["needs_attention"] == 1  # Go never retries a failure
+    groups = {q["id"]: q for q in work_queue.items(steward.cfg, steward.db)}
+    assert groups[queued]["group"] == "ready" and groups[failed]["group"] == "attention"
+    assert "Go never retries a failure" in groups[failed]["go_will"]

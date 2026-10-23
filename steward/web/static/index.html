@@ -319,8 +319,12 @@ function renderHeader() {
   pb.classList.toggle("hidden", !paused);
   if (paused) pb.textContent = `⏸ Claude is paused until ${new Date(paused.until).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}: ${paused.reason} New messages are still collected and will be drafted automatically after that.`;
   const go = $("#goBtn");
-  go.textContent = c.staged ? `Go: execute ${c.staged} decision${c.staged === 1 ? "" : "s"}` : (c.in_flight ? `Go (${c.in_flight} queued)` : "Go");
-  go.disabled = c.staged + c.in_flight === 0;
+  // Only what Go actually runs: decisions pending confirmation, queued items, deferred items whose time has come.
+  const ready = c.ready_to_go || 0;
+  go.textContent = ready ? `Go: run ${ready}` : "Go";
+  go.disabled = ready === 0;
+  go.title = ready ? `Runs the ${ready} item${ready === 1 ? "" : "s"} under "Ready to go" in the Queue tab`
+    : (c.needs_attention ? `Nothing to run. ${c.needs_attention} failed item(s) need Re-execute or Discard (Queue tab)` : "Nothing to run");
   $("#instant").checked = !!B.settings.execute_on_approve;
   const badge = $("#badge");
   badge.textContent = c.undecided; badge.classList.toggle("hidden", !c.undecided);
@@ -775,10 +779,22 @@ const queueMenu = (r) => `<details class="dd"><summary class="btn small">Actions
 async function renderQueue() {
   const { items } = await api("/api/queue");
   const host = $("#tab-queue");
-  const staged = B.counts.staged || 0;
-  host.innerHTML = `${staged ? `<div class="card blocker info"><b>${staged} decision${staged === 1 ? "" : "s"} pending confirmation</b>
-      <div class="meta">You decided ${staged === 1 ? "it" : "them"} in the briefing. Nothing runs until you press Go.</div>
-      <div class="buttons"><button class="btn primary" data-go-now>Go: execute ${staged} decision${staged === 1 ? "" : "s"}</button></div></div>` : ""}
+  const group = (g) => items.filter(r => r.group === g);
+  const ready = group("ready"), attention = group("attention"), waiting = group("waiting");
+  const card = (r, kind, buttons) => `<div class="card blocker ${kind}"><b>${esc(r.summary)}</b>
+      <div class="meta"><span class="chip ${QUEUE_CHIP[r.status] || ""}">${esc(r.status_label)}</span> ${esc(r.go_will || r.reason || "")}</div>
+      ${r.actions.length ? `<div class="meta">${esc(r.actions.map(a => `${a.type} → ${a.target}`).join(" · "))}</div>` : ""}
+      ${buttons ? `<div class="buttons">${buttons}</div>` : ""}</div>`;
+  host.innerHTML = `<h2 class="sec">Ready to go <span class="count">${ready.length}</span></h2>
+    ${ready.length ? `<p class="meta">Pressing <b>Go</b> runs exactly these.</p>${ready.map(r => card(r, "info", "")).join("")}
+      <div class="buttons"><button class="btn primary" data-go-now>Go: run ${ready.length}</button></div>`
+      : `<div class="card"><b>Nothing is waiting for Go.</b><div class="meta">Decisions you make in the briefing appear here until you press Go.</div></div>`}
+    ${attention.length ? `<h2 class="sec">Needs your attention <span class="count">${attention.length}</span></h2>
+      <p class="meta">These failed. Go does not retry a failure: Re-execute or Discard each one.</p>
+      ${attention.map(r => card(r, "error", `<button class="btn small primary" data-reexec="${r.id}">Re-execute</button> <button class="btn small danger" data-discard="${r.id}">Discard</button>`) + `<div class="meta" style="margin:-6px 0 12px 4px">${esc(r.reason || "")}</div>`).join("")}` : ""}
+    ${waiting.length ? `<h2 class="sec">Waiting <span class="count">${waiting.length}</span></h2>
+      ${waiting.map(r => card(r, "warn", r.can_execute ? `<button class="btn small primary" data-exec="${r.id}">Execute now</button>` : "")).join("")}` : ""}
+    <h2 class="sec">Everything in the queue</h2>
     <p class="meta">Every decided action that has not finished, and what finished in the last day. LinkedIn replies wait for business hours (${esc(B.linkedin_hours || "set in steward.yaml")}); <b>Execute</b> sends one now. Click a row for each action's status.</p><div id="queueTable"></div>`;
   dataTable($("#queueTable"), {
     id: "queue", rows: items, noun: "actions", defaultSort: { key: "updated", dir: "desc" },
@@ -1110,7 +1126,7 @@ $("#pollBtn").addEventListener("click", async () => {
 });
 $("#goBtn").addEventListener("click", async () => {
   const c = B.counts;
-  if (!confirm(`Execute ${c.staged} decision(s) now? Approved replies will be sent and meetings booked.`)) return;
+  if (!confirm(`Run the ${c.ready_to_go} item(s) under "Ready to go" in the Queue tab now? Approved replies will be sent and meetings booked.`)) return;
   const b = $("#goBtn"); b.disabled = true; b.textContent = "Executing…";
   await act(() => api("/api/go", "POST", {}), (r) => `Done: ${r.executed} executed, ${r.deferred} deferred (LinkedIn pacing), ${r.failed} failed.`);
 });

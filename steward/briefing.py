@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 from steward import tasks as tasks_mod
+from steward import work_queue
 from steward.agents.router import calibration
 from steward.config import Config
 from steward.db import Database, loads
@@ -145,6 +146,7 @@ def build(cfg: Config, db: Database, meetings: list[dict[str, Any]] | None = Non
             "handled_automatically": len(handled),
             "handled_silently": len(silent),
             "in_flight": len(in_flight),
+            **work_queue.go_counts(db),  # what Go runs now, what waits, what failed
             "tasks_open": db.scalar("SELECT COUNT(*) FROM tasks WHERE status = 'open'") or 0,
             "tasks_suggested": db.scalar("SELECT COUNT(*) FROM tasks WHERE status = 'suggested'") or 0,
             "tasks_due_soon": sum(1 for t in deadlines if t["due_soon"] or t["overdue"]),
