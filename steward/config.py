@@ -92,6 +92,9 @@ class MailConfig(BaseModel):
     # "Thank you for applying" emails that ask nothing of you: marked as read and moved to this label.
     file_application_acks: bool = True
     applications_label: str = "Jobs"
+    # Once an item is handled (reply sent, rejected, discarded, or answered by you), its emails are marked as
+    # read and moved to applications_label, out of the inbox.
+    cleanup_handled: bool = True
     initial_lookback_days: int = 7
     max_per_poll: int = 40
     prefilter: Literal["keywords", "all"] = "keywords"

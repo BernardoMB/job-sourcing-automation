@@ -99,6 +99,11 @@ before any AI call. If you prefer, create a Gmail filter that labels recruiter m
   marked as read and moved to your **Jobs** label (no AI call, no draft). One that also asks something of you (a
   video interview, an assessment, scheduling), turns you down, or makes an offer goes through the normal flow.
   Settings: `mail.file_application_acks`, `mail.applications_label`.
+- **Your inbox is cleaned up once you have handled something.** When a reply has really gone out, you rejected an
+  item and pressed Go, you discarded it, or you had already answered it yourself, the emails about it are marked as
+  read and moved to **Jobs**. That is the email itself and earlier ones in its thread, the LinkedIn "new message"
+  notifications for that conversation, and the invitation email for that meeting. Emails that arrived after you
+  handled it, and emails whose task is still open, stay in your inbox. Setting: `mail.cleanup_handled`.
 - **Mail from LinkedIn is never answered by email** (message and InMail notifications, job alerts, digests). When
   one says someone messaged you, Job Sourcer checks LinkedIn right away and drafts the reply there.
 - **Recruiters' meeting invitations go on your calendar right away, without asking**: an invitation file (`.ics`,

@@ -266,6 +266,8 @@ MIGRATIONS = [
     ("preferences", "sender", "TEXT"),
     ("drafts", "revised_from", "INTEGER"),
     ("drafts", "closed_at", "TEXT"),      # when it was discarded, or found no longer needed
+    ("drafts", "cleaned_at", "TEXT"),     # when its emails were filed away (mail_cleanup)
+    ("events", "filed_at", "TEXT"),       # when this email was marked read and moved to the Jobs label
 ]
 
 

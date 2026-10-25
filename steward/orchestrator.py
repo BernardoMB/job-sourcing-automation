@@ -16,8 +16,8 @@ import re
 from datetime import timedelta
 from typing import Any
 
-from steward import (acknowledgments, activity, assessments, channels, decisions, linkedin_bridge, notify, pipeline, priority,
-                     reconcile, sound)
+from steward import (acknowledgments, activity, assessments, channels, decisions, linkedin_bridge, mail_cleanup,
+                     notify, pipeline, priority, reconcile, sound)
 from steward import tasks as tasks_mod
 from steward.agents import classifier, cv_analyst, drafter, fewshot, instructor, scheduler
 from steward.agents.base import AgentContext
@@ -108,6 +108,7 @@ class Steward:
             sound.new_events(self.cfg, summary["new_events"])
             # Anything you already handled yourself (on LinkedIn, by email, in your calendar) is closed now.
             summary["reconciled"] = await reconcile.run(self, hub, checked, summary["errors"])
+            summary["cleaned"] = await self.cleanup_mail(hub, summary["errors"])
             summary["ingested"]["follow_ups"] = self.detect_follow_ups()
             try:
                 summary["reprioritized"] = await self.reprioritize(hub)
@@ -137,12 +138,12 @@ class Steward:
         names = {"email": "email", "linkedin": "LinkedIn", "calendar": "calendar"}
         idle = all(state in ("not due", "off") for state in checked.values()) and not (
             summary["processed"] or summary["auto_executed"] or summary.get("deferred_retried") or summary["errors"]
-            or summary.get("reconciled"))
+            or summary.get("reconciled") or summary.get("cleaned"))
         if idle and trigger == "scheduled":
             return  # the loop woke up but nothing was due: not a check worth a line
         parts = [f"{names[s]}: {state}" for s, state in checked.items()]
         for label, n in (("processed", summary["processed"]), ("handled automatically", summary["auto_executed"]),
-                         ("reconciled", summary.get("reconciled", 0)),
+                         ("reconciled", summary.get("reconciled", 0)), ("emails cleaned up", summary.get("cleaned", 0)),
                          ("deferred actions sent", summary.get("deferred_retried", 0))):
             if n:
                 parts.append(f"{label} {n}")
@@ -175,6 +176,7 @@ class Steward:
             processed, auto = await self.process_pending(hub, result["errors"])
             result["redrafted"] = processed
             self.rescore()
+            result["cleaned"] = await self.cleanup_mail(hub, result["errors"])
         try:
             result["learning"] = await Learner(self.cfg, self.db, self.ledger, self.llm).run()
         except Exception as exc:  # noqa: BLE001
@@ -217,6 +219,7 @@ class Steward:
                             "'unknown'", (now_iso(), draft_id))
             result = await Executor(self.cfg, self.db, self.ledger, hub).execute_draft(draft_id, force=True)
             await self.sync_notion(hub, [])
+            await self.cleanup_mail(hub)
         return result
 
     async def discard(self, draft_id: int) -> dict[str, Any]:
@@ -234,6 +237,8 @@ class Steward:
                         reason += (" It is still waiting in the LinkedIn toolkit (Copilot mode): reject it in the "
                                    "extension popup too, or it may still be sent.")
         reconcile.close(self, draft, reason, status="discarded", level="warn", kind="discard")
+        async with MCPHub(self.cfg) as hub:
+            await self.cleanup_mail(hub)
         return {"draft_id": draft_id, "status": "discarded", "reason": reason}
 
     async def go_one(self, draft_id: int) -> dict[str, Any]:
@@ -248,6 +253,7 @@ class Steward:
             result = await Executor(self.cfg, self.db, self.ledger, hub).execute_draft(draft_id)
             errors: list[str] = []
             await self.sync_notion(hub, errors)
+            await self.cleanup_mail(hub, errors)
             if result["status"] == "superseded":
                 await self.process_pending(hub, errors)
             self.rescore()
@@ -466,10 +472,10 @@ class Steward:
             subject, body = msg.get("subject", ""), msg.get("body_text", "")
             known_thread = self.db.query_one("SELECT 1 FROM opportunity_threads WHERE thread_key = ?", (thread_key,))
             known_sender = self.db.query_one("SELECT 1 FROM opportunities WHERE lower(recruiter_email) = ?", (sender,))
-            why = None
+            why, filed = None, False
             if self.cfg.mail.file_application_acks and acknowledgments.is_application_ack(msg):
                 # "Thank you for applying": nothing to answer or do. Read, filed, no AI call.
-                why = await self._file_application_ack(hub, msg)
+                why, filed = await self._file_application_ack(hub, msg)
             elif channels.is_linkedin_address(sender):
                 # Never answered by email. A message notification means: read and answer it on LinkedIn, now.
                 notice = channels.is_linkedin_message_notice(sender, subject, body)
@@ -490,6 +496,7 @@ class Steward:
                 "subject": subject, "body_text": body,
                 "received_at": msg.get("date") or now_iso(), "raw_json": dumps(msg),
                 "status": "ignored" if why else "new", "error": why,
+                **({"filed_at": now_iso()} if filed else {}),
             })
             if event_id:
                 count += 1
@@ -499,15 +506,25 @@ class Steward:
         self.db.kv_set("mail:last_uid", res.get("last_uid", since))
         return count
 
-    async def _file_application_ack(self, hub: MCPHub, msg: dict[str, Any]) -> str:
+    async def _file_application_ack(self, hub: MCPHub, msg: dict[str, Any]) -> tuple[str, bool]:
         label = self.cfg.mail.applications_label
         try:
             await hub.call("mail", "file_message", {"uid": int(msg["uid"]), "folder": msg.get("folder", ""),
                                                     "label": label, "mark_read": True},
                            capability=ExecutorCapability())
-            return f"Application acknowledgment: marked as read and moved to {label} (nothing to answer or do)."
+            return f"Application acknowledgment: marked as read and moved to {label} (nothing to answer or do).", True
         except (MCPToolError, KeyError, ValueError) as exc:
-            return f"Application acknowledgment (nothing to answer or do), but it could not be moved to {label}: {exc}"
+            return (f"Application acknowledgment (nothing to answer or do), but it could not be moved to {label}: "
+                    f"{exc}"), False
+
+    async def cleanup_mail(self, hub: MCPHub, errors: list[str] | None = None) -> int:
+        """Handled items' emails leave the inbox: marked as read and moved to the Jobs label."""
+        try:
+            return await mail_cleanup.sweep(self, hub)
+        except (MCPToolError, OSError) as exc:
+            if errors is not None:
+                errors.append(f"mail cleanup: {exc}")
+            return 0
 
     async def ingest_linkedin(self, hub: MCPHub) -> int:
         since = self.db.kv_get("linkedin:since", "")
