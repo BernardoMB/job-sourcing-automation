@@ -52,3 +52,37 @@ def test_filing_can_be_switched_off(steward):
              "We have received your application for Data Engineer. We will review your application soon.")
     run(steward.cycle(force=True))
     assert "labels" not in _message(steward, 710)
+
+
+def test_acknowledgments_that_only_describe_later_steps_are_still_filed():
+    from steward.acknowledgments import is_application_ack
+
+    filed = {
+        # Real wordings that used to slip into the pipeline.
+        "We received your application for a position at Simpat Tech":
+            "You have successfully submitted your application. Someone will review your qualifications shortly. "
+            "Should your profile match our requirements, we will be in touch to schedule the next steps.",
+        "Thanks for applying for Full-Stack Engineer":
+            "Thank you for applying. We received your information and will contact you if there is a good match. If "
+            "your profile is a good match, you will soon receive an invitation to complete a one-way video interview. "
+            "We look forward to receiving and reviewing your video interview soon!",
+        "Thank you: we received your application to join Clara":
+            "We correctly received your application. We'll review your application. If you're not selected for this "
+            "position, keep an eye on our jobs. Please do not reply: unfortunately replies will not be read.",
+        "Senior Fullstack Engineer - DaCodes":
+            "We have received your application. Should your profile align with any of our open positions, we will "
+            "reach out to\nyou to schedule an initial interview.",
+        "Thanks for applying to DaCodes":
+            "Your application was submitted successfully. Here's a copy of your application data: PERSONAL "
+            "INFORMATION ... Implemented risk assessment and compliance modules. Took a HackerRank test.",
+    }
+    kept = {  # they ask something of you now, or turn you down: never filed silently
+        "Thank you for applying - assessment": "Thank you for applying! Please complete the assessment by Friday.",
+        "Thanks for applying - book": "Thanks for applying. Please schedule your interview here: https://calendly.com/x",
+        "Your application": "Thank you for applying. Unfortunately, we will not be moving forward with your application.",
+        "Update": "Thank you for your application. We have decided to move forward with other candidates.",
+    }
+    for subject, body in filed.items():
+        assert is_application_ack({"subject": subject, "body_text": body}), subject
+    for subject, body in kept.items():
+        assert not is_application_ack({"subject": subject, "body_text": body}), subject

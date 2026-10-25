@@ -130,6 +130,15 @@ def create_database(parent_page_id: str, title: str = "Job Pipeline (Job Sourcer
     return {"database_id": data["id"], "url": data.get("url", "")}
 
 
+@mcp.tool(annotations=WRITE)
+@guarded
+def archive_opportunity(page_id: str) -> dict[str, Any]:
+    """Take a pipeline row out of the database (Notion archives it; it can be restored from Trash)."""
+    with _client() as c:
+        data = _check(c.patch(f"/pages/{page_id}", json={"archived": True}))
+    return {"page_id": data["id"], "archived": bool(data.get("archived"))}
+
+
 @mcp.tool(annotations=READ_ONLY_REMOTE)
 @guarded
 def query_opportunities(steward_id: int = 0, company: str = "", recruiter_email: str = "") -> dict[str, Any]:
