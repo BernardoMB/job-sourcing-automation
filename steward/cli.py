@@ -778,11 +778,15 @@ def app_window(no_window: bool = typer.Option(False, "--no-window", help="Only m
     if not state:
         log_dir = c.data_path / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
-        flags = 0
+        flags, python = 0, sys.executable
         if sys.platform == "win32":
             flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+            # pythonw: no console at all. A console Python started without one gets a new, visible (empty)
+            # console window, which Claude Code then renames "claude". Output still goes to server.log.
+            windowless = Path(sys.executable).with_name("pythonw.exe")
+            python = str(windowless) if windowless.exists() else python
         with open(log_dir / "server.log", "a", encoding="utf-8") as out:
-            subprocess.Popen([sys.executable, "-m", "steward", "-c", c.config_path, "serve"], stdout=out, stderr=out,
+            subprocess.Popen([python, "-m", "steward", "-c", c.config_path, "serve"], stdout=out, stderr=out,
                              stdin=subprocess.DEVNULL, creationflags=flags, close_fds=True)
         for _ in range(60):
             if _running(url, c.config_path) == "same":

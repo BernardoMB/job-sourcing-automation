@@ -33,6 +33,11 @@ from steward.llm.base import LLMError, LLMRefusal, LLMUnavailable, extract_json
 _KEEP_ENV = {"CLAUDE_CODE_GIT_BASH_PATH", "CLAUDE_CONFIG_DIR"}
 
 
+# Job Sourcer's server runs without a console, so Windows would open a new, empty console window
+# (titled "claude") for every Claude Code call. Its output is captured anyway: start it hidden.
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
 def find_claude(configured: str = "") -> str:
     candidates = [configured, shutil.which("claude") or ""]
     local = os.environ.get("LOCALAPPDATA", "")
@@ -63,7 +68,7 @@ def auth_status(configured_path: str = "") -> dict[str, Any]:
         return {"installed": False, "loggedIn": False}
     try:
         p = subprocess.run([exe, "auth", "status"], capture_output=True, text=True, encoding="utf-8",
-                           env=clean_env(), timeout=60)
+                           env=clean_env(), timeout=60, creationflags=NO_WINDOW)
         data = json.loads(p.stdout or "{}")
     except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
         return {"installed": True, "loggedIn": False, "error": str(exc), "path": exe}
@@ -116,7 +121,8 @@ class ClaudeCodeLLM:
             args += ["--effort", effort]
         try:
             proc = subprocess.run(args, input=user, capture_output=True, text=True, encoding="utf-8",
-                                  cwd=self.workdir, env=clean_env(), timeout=self.cfg.claude_code_timeout)
+                                  cwd=self.workdir, env=clean_env(), timeout=self.cfg.claude_code_timeout,
+                                  creationflags=NO_WINDOW)
         except subprocess.TimeoutExpired as exc:
             raise LLMUnavailable(f"Claude Code did not answer within {self.cfg.claude_code_timeout}s",
                                  datetime.now(timezone.utc) + timedelta(minutes=2)) from exc
