@@ -100,7 +100,7 @@ TIER_LABELS = {
     "auto_send": "Act silently",
 }
 
-ACTION_TYPES = ["send_email", "send_linkedin", "create_event", "rsvp_event"]
+ACTION_TYPES = ["send_email", "send_linkedin", "send_whatsapp", "create_event", "rsvp_event"]
 
 # Things only the candidate can do (they become tasks, never automated actions).
 TASK_KINDS = {

@@ -42,6 +42,12 @@ PREFILTER = re.compile(
     r"testgorilla|hackerearth|coderbyte|karat|mettl|imocha|testdome|devskiller|coderpad|codingame|hirevue)",
     re.IGNORECASE,
 )
+# WhatsApp chats are often in Spanish: a chat is looked at when it has either signal.
+JOB_WORDS_ES = re.compile(
+    r"\b(vacante|puesto|reclut|entrevista|oferta (laboral|de (trabajo|empleo))|empleo|trabajo|postula|candidat|"
+    r"sueldo|salario|curr[ií]cul|oportunidad|contrataci[oó]n|recursos humanos|headhunter|talento)",
+    re.IGNORECASE,
+)
 
 
 def hydrate(event: dict[str, Any]) -> dict[str, Any]:
@@ -80,6 +86,7 @@ class Steward:
             for source, fn, minutes in (
                 ("email", self.ingest_email, self.cfg.mail.poll_minutes),
                 ("linkedin", self.ingest_linkedin, self.cfg.linkedin.poll_minutes),
+                ("whatsapp", self.ingest_whatsapp, self.cfg.whatsapp.poll_minutes),
                 ("calendar", self.ingest_calendar, self.cfg.calendar.poll_minutes),
             ):
                 # A LinkedIn message notification in the mail makes LinkedIn due right away.
@@ -101,10 +108,11 @@ class Steward:
                     checked[source] = "failed"
                     summary["errors"].append(f"{source}: {exc}")
                     log.warning("ingest %s failed: %s", source, exc)
-            # Chime now, before the slow drafting: filtered-out mail and our own follow-ups don't count.
+            # Chime now, before the slow drafting: filtered-out mail and our own follow-ups don't count. A
+            # WhatsApp chat counts only once it is known to be about a job (after processing, below).
             summary["new_events"] = self.db.scalar(
-                "SELECT COUNT(*) FROM events WHERE id > ? AND source != 'steward' AND status != 'ignored'",
-                (last_event,)) or 0
+                "SELECT COUNT(*) FROM events WHERE id > ? AND source NOT IN ('steward', 'whatsapp') AND "
+                "status != 'ignored'", (last_event,)) or 0
             sound.new_events(self.cfg, summary["new_events"])
             # Anything you already handled yourself (on LinkedIn, by email, in your calendar) is closed now.
             summary["reconciled"] = await reconcile.run(self, hub, checked, summary["errors"])
@@ -116,6 +124,13 @@ class Steward:
                 summary["errors"].append(f"reprioritize: {exc}")
             processed, auto = await self.process_pending(hub, summary["errors"])
             summary["processed"], summary["auto_executed"] = processed, auto
+            job_chats = self.db.scalar("SELECT COUNT(*) FROM events WHERE id > ? AND source = 'whatsapp' AND "
+                                       "status NOT IN ('ignored', 'new')", (last_event,)) or 0
+            if job_chats and not summary["new_events"]:
+                sound.new_events(self.cfg, job_chats)
+            summary["new_events"] += job_chats
+            if checked.get("whatsapp", "").endswith(" new"):
+                checked["whatsapp"] = f"{job_chats} new"  # personal chats are not even counted
             self.rescore()
             executor = Executor(self.cfg, self.db, self.ledger, hub)
             due = await executor.run_queue(include_deferred_only=True)
@@ -135,7 +150,7 @@ class Steward:
         return summary
 
     def _log_check(self, trigger: str, checked: dict[str, str], summary: dict[str, Any], seconds: float) -> None:
-        names = {"email": "email", "linkedin": "LinkedIn", "calendar": "calendar"}
+        names = {"email": "email", "linkedin": "LinkedIn", "whatsapp": "WhatsApp", "calendar": "calendar"}
         idle = all(state in ("not due", "off") for state in checked.values()) and not (
             summary["processed"] or summary["auto_executed"] or summary.get("deferred_retried") or summary["errors"]
             or summary.get("reconciled") or summary.get("cleaned"))
@@ -559,6 +574,50 @@ class Steward:
             self.db.kv_set("linkedin:since", newest)
         return count
 
+    async def ingest_whatsapp(self, hub: MCPHub) -> int:
+        """New messages in one-to-one WhatsApp chats. A chat that is not about a job is ignored completely:
+        nothing of it is stored or logged (the classifier gets only chats that look job-related)."""
+        since = self.db.kv_get("whatsapp:since", "")
+        res = await hub.call("whatsapp", "list_conversations", {"since": since, "limit": 30})
+        count = 0
+        newest = since
+        for conv in res.get("conversations", []):
+            msgs = conv.get("messages", [])
+            last_out = max((i for i, m in enumerate(msgs) if m["from"] == "me"), default=-1)
+            new_in = [m for m in msgs[last_out + 1:] if m["from"] == "them"]
+            if not new_in:
+                continue
+            last = new_in[-1]
+            if not newest or (last.get("sent_at") or "") > newest:
+                newest = last.get("sent_at") or newest
+            if conv.get("is_group") or not self._maybe_job_chat(conv, msgs):
+                continue
+            event_id = self._insert_event({
+                "source": "whatsapp", "external_id": f"{conv['id']}:{last['id']}", "thread_key": conv["id"],
+                "sender_name": conv.get("participant_name", ""),
+                "sender_address": conv.get("phone") or f"whatsapp:{conv['id']}",
+                "subject": "", "body_text": "\n\n".join(m["text"] for m in new_in),
+                "received_at": last.get("sent_at") or now_iso(),
+                "raw_json": dumps({"conversation_id": conv["id"], "phone": conv.get("phone", ""),
+                                   "new_messages": len(new_in), "history": msgs[: max(last_out + 1, 0)]}),
+            })
+            count += 1 if event_id else 0
+        if newest:
+            self.db.kv_set("whatsapp:since", newest)
+        return count
+
+    def _maybe_job_chat(self, conv: dict[str, Any], msgs: list[dict[str, Any]]) -> bool:
+        """Worth classifying: a chat already tied to an opportunity, or one whose recent messages mention a job."""
+        if self.db.query_one("SELECT 1 FROM opportunity_threads WHERE source = 'whatsapp' AND thread_key = ?",
+                             (conv["id"],)):
+            return True
+        number = pipeline.digits(conv.get("phone", ""))
+        if number and any(pipeline.digits(o["recruiter_phone"]) == number for o in self.db.query(
+                "SELECT recruiter_phone FROM opportunities WHERE ifnull(recruiter_phone, '') != ''")):
+            return True
+        text = "\n".join(m.get("text", "") for m in msgs[-12:])
+        return bool(PREFILTER.search(text) or JOB_WORDS_ES.search(text))
+
     async def ingest_calendar(self, hub: MCPHub) -> int:
         res = await hub.call("calendar", "pending_invites", {"days": self.cfg.calendar.invite_lookahead_days})
         count = 0
@@ -720,7 +779,7 @@ class Steward:
         })
 
     def thread_history(self, event: dict[str, Any]) -> list[dict[str, Any]]:
-        if event["source"] == "linkedin":
+        if event["source"] in ("linkedin", "whatsapp"):
             return [{"direction": "out" if m["from"] == "me" else "in", "sender": event.get("sender_name"),
                      "at": m.get("sent_at", ""), "text": m.get("text", "")}
                     for m in event["raw"].get("history", [])]
@@ -747,14 +806,15 @@ class Steward:
                 "urgency": "normal", "suspicious": False, "risk_level": risk_of([category])}
 
     def _reply_target(self, opp: dict[str, Any] | None) -> dict[str, Any] | None:
-        """Where to answer someone who reached you by phone: their latest email or LinkedIn thread."""
+        """Where to answer someone who reached you by phone: their latest email, LinkedIn, or WhatsApp thread."""
         if not opp:
             return None
         ev = next((e for e in self.db.query(
-            "SELECT * FROM events WHERE opportunity_id = ? AND source IN ('email', 'linkedin') ORDER BY received_at DESC",
+            "SELECT * FROM events WHERE opportunity_id = ? AND source IN ('email', 'linkedin', 'whatsapp') "
+            "ORDER BY received_at DESC",
             (opp["id"],)) if not (e["source"] == "email" and channels.is_linkedin_address(e["sender_address"]))), None)
-        if ev and ev["source"] == "linkedin":
-            return {"channel": "linkedin", "conversation_id": ev["thread_key"], "recipient": ev["sender_name"],
+        if ev and ev["source"] in ("linkedin", "whatsapp"):
+            return {"channel": ev["source"], "conversation_id": ev["thread_key"], "recipient": ev["sender_name"],
                     "thread_key": ev["thread_key"]}
         if ev:
             raw = loads(ev["raw_json"], {}) or {}
@@ -794,9 +854,24 @@ class Steward:
         self.db.update("events", event["id"], {"classification_json": dumps(cls)})
 
         if not cls["is_recruiter_related"]:
+            if event["source"] == "whatsapp":
+                # A personal chat: nothing of it is kept (only the id, so it is not read again).
+                self.db.update("events", event["id"], {
+                    "status": "ignored", "processed_at": now_iso(), "error": "Not about a job: ignored.",
+                    "sender_name": "", "sender_address": "", "body_text": "", "raw_json": "{}",
+                    "classification_json": None})
+                return "ignored"
             self.db.update("events", event["id"], {"status": "ignored", "processed_at": now_iso(),
                                                    "error": "Not related to your job search."})
             return "ignored"
+        if event["source"] == "whatsapp":
+            if not event.get("sender_name") and cls.get("recruiter_name"):
+                # A hidden-number chat (…@lid) often comes without a contact name: use the one in the messages.
+                event["sender_name"] = cls["recruiter_name"]
+                self.db.update("events", event["id"], {"sender_name": event["sender_name"]})
+            activity.record(self.db, "message", f"WhatsApp message from {event.get('sender_name') or 'someone'} "
+                            f"({raw.get('new_messages', 1)} new): {cls.get('summary') or 'about a job'}",
+                            event_id=event["id"])
 
         call = "call_notification" in cls["categories"]
         if follow_up:
@@ -975,9 +1050,9 @@ class Steward:
             return actions
         raw = event["raw"]
         via = raw.get("reply_via")
-        if via and via["channel"] == "linkedin":
-            actions.append({"type": "send_linkedin", "payload": {"conversation_id": via["conversation_id"],
-                                                                 "text": body, "recipient": via.get("recipient", "")}})
+        if via and via["channel"] in ("linkedin", "whatsapp"):
+            actions.append({"type": f"send_{via['channel']}", "payload": {
+                "conversation_id": via["conversation_id"], "text": body, "recipient": via.get("recipient", "")}})
             return actions
         if via:
             actions.append({"type": "send_email", "payload": {
@@ -987,12 +1062,12 @@ class Steward:
         channel = event["source"]
         if channel == "steward":
             channel = raw.get("channel", "email")
-        if channel == "linkedin":
+        if channel in ("linkedin", "whatsapp"):
             conv = raw.get("conversation_id") or event.get("thread_key")
             if raw.get("last_outbound"):
                 conv = raw["last_outbound"].get("thread_key") or conv
-            actions.append({"type": "send_linkedin", "payload": {"conversation_id": conv, "text": body,
-                                                                 "recipient": event.get("sender_name", "")}})
+            actions.append({"type": f"send_{channel}", "payload": {"conversation_id": conv, "text": body,
+                                                                    "recipient": event.get("sender_name", "")}})
             return actions
         to = event.get("sender_address") or (opp or {}).get("recruiter_email") or ""
         if channels.is_linkedin_address(to) or channels.is_no_reply(to) or assessments.from_platform(to):
@@ -1023,8 +1098,8 @@ class Steward:
             "actions_json": "[]", "analysis_json": dumps({"classification": cls}),
             "confidence": 0.0, "job_advancement": 0.0, "routing_band": "LOW", "risk_level": cls.get("risk_level", "medium"),
             "priority": "high", "route": "ask", "status": "pending", "created_at": now_iso(),
-            "route_reasons_json": dumps([f"They called you. Call back {number}: no email or LinkedIn thread is known "
-                                         "for them yet, so Job Sourcer cannot reply in writing."]),
+            "route_reasons_json": dumps([f"They called you. Call back {number}: no email, LinkedIn, or WhatsApp "
+                                         "thread is known for them yet, so Job Sourcer cannot reply in writing."]),
         })
         self.db.update("events", event["id"], {"status": "processed", "processed_at": now_iso()})
 

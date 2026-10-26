@@ -132,9 +132,9 @@ def test_dashboard_api(workspace):
         assert client.get("/api/stream").status_code == 403
         evil = TestClient(app, base_url="http://evil.example")
         assert evil.get("/api/briefing").status_code == 403  # DNS-rebinding guard
-        assert client.post("/api/poll", headers=h).json()["processed"] == 10
+        assert client.post("/api/poll", headers=h).json()["processed"] == 12  # 10 + 2 WhatsApp chats
         b = client.get("/api/briefing").json()
-        assert b["counts"]["undecided"] == 9 and b["loop"]["polls"]["email"] == 1
+        assert b["counts"]["undecided"] == 10 and b["loop"]["polls"]["email"] == 1  # 9 + the WhatsApp recruiter
         scores = [v["priority_score"] for v in b["high_priority"]]
         assert scores == sorted(scores, reverse=True)
 
@@ -170,3 +170,17 @@ def test_linkedin_upstream_adapter():
     assert pick_upstream_tool("send_message", tools, {"send_message": "custom"}) == "custom"
     schema = {"properties": {"threadUrn": {"type": "string"}, "body": {"type": "string"}}}
     assert adapt_args(schema, {"conversation_id": "c1", "text": "hi"}) == {"threadUrn": "c1", "body": "hi"}
+
+
+def test_an_open_window_keeps_working_after_a_restart(workspace):
+    """The page's token survives a restart of the background process; a wrong one is still refused."""
+    tokens = []
+    for _ in range(2):  # two starts of Job Sourcer on the same workspace
+        app = create_app(load_config(workspace), watch=False)
+        with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+            tokens.append(client.get("/").text.split('const TOKEN = "')[1].split('"')[0])
+            assert client.post("/api/setup/sound-test", headers={"X-Steward-Token": "stale"}).json() == \
+                {"error": "missing or invalid token"}
+    assert tokens[0] == tokens[1] and len(tokens[0]) >= 24
+    page = (load_config(workspace).data_path / "dashboard_token").read_text(encoding="utf-8")
+    assert page == tokens[0]

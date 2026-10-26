@@ -21,9 +21,11 @@ open source and runs on your machine.
 
 ## Everyday use: just keep the window open
 
-1. Double-click **`Start Job Sourcer.cmd`** (or turn on *Start when you log in* in Setup). Job Sourcer starts in the
-   background and opens its window. There is no terminal to keep open.
-2. It watches continuously: email every minute, calendar every 2 minutes, LinkedIn every 10 minutes. Every new
+1. Double-click the **Job Sourcer** shortcut on your Desktop or in the Start menu (or `Start Job Sourcer.cmd`, or
+   turn on *Start when you log in* in Setup). Job Sourcer starts in the background and opens its window. There is no
+   terminal to keep open. (No shortcut yet? Run `steward shortcut` once.)
+2. It watches continuously: email every minute, calendar every 2 minutes, LinkedIn every 10 minutes, WhatsApp
+   every 5 minutes (only chats about a job; every other chat is ignored completely). Every new
    event (a recruiter message, a calendar invitation, a moved or cancelled meeting, a missed call or voicemail)
    is drafted, routed, and either handled under a rule you approved or put in front of you, re-prioritized. The
    window updates by itself, with a toast, a count in the title, and optional desktop/phone notifications.
@@ -223,13 +225,22 @@ the project folder; otherwise pass `-c path/to/steward.yaml`.
    Map the three logical tools to the toolkit's actual tool names. Responses are normalized best-effort; check with
    `steward doctor`. Caps: `hourly_cap`, `daily_cap`, `business_hours`, `min/max_delay_seconds`. LinkedIn automation
    always carries some account risk; keep the caps low.
-7. **Notion** (optional pipeline mirror, `notion:`): create an internal integration at notion.so/my-integrations,
+7. **WhatsApp** (`whatsapp:`): one-to-one chats through an upstream WhatsApp MCP server linked to your account as a
+   linked device, by default [whatsapp-mcp-ts](https://github.com/jlucaso1/whatsapp-mcp-ts). Run
+   `steward whatsapp-link` once: it installs it in `~/.whatsapp-mcp-ts`, removes the line that would show its QR
+   code on quickchart.io, sets `whatsapp.backend: upstream`, and shows the QR code to scan. Only chats that are
+   already part of an opportunity, or that mention a job (English or Spanish keywords), go to triage; a chat triage
+   finds personal is wiped from the database. Groups are skipped (`include_groups`). Replies are paced like
+   LinkedIn's (`hourly_cap`, `daily_cap`, `business_hours`, `min/max_delay_seconds`). The upstream is started for
+   each check and given `settle_seconds` (20) to receive what arrived while it was offline. Sandbox:
+   `steward sandbox-whatsapp --name "..." --text "..."`.
+8. **Notion** (optional pipeline mirror, `notion:`): create an internal integration at notion.so/my-integrations,
    put the token in `.env` as `NOTION_TOKEN`, share a page with the integration, then
    `steward notion-init --parent-page <page id>` and set `notion.enabled: true` and `notion.database_id`. If you
    move an opportunity to "Offer" in Notion, the router sees it and revokes autonomy for that thread.
-8. **Notifications** (optional, `notifications:`): `ntfy` (self-hostable push to your phone) and/or Telegram; quiet
+9. **Notifications** (optional, `notifications:`): `ntfy` (self-hostable push to your phone) and/or Telegram; quiet
    hours, a minimum number of pending decisions, cooldown, and reminders before job meetings.
-9. Check everything:
+10. Check everything:
 
    ```bash
    .venv/Scripts/steward.exe doctor
@@ -242,6 +253,11 @@ where `tools` maps Job Sourcer's tool names to the other server's.
 
 `Start Job Sourcer.cmd` runs `steward app`: it starts `steward serve` (dashboard + watch loop) as a hidden background
 process if it is not already running, then opens the window. Logs go to `workspace/data/logs/server.log`.
+The window is Job Sourcer's own (`steward window`, a WebView2 window via pywebview) with its own taskbar button and
+the multi-size icon in `assets/logo`, so the logo stays sharp at any display scaling; it opens once (starting it again
+brings it to the front), and closing it leaves the background process running. Without pywebview it falls back to an
+Edge/Chrome app window. `steward shortcut` creates (or refreshes) the Desktop and Start menu shortcuts; pin either
+to the taskbar and it shares the window's button.
 Start-at-login (Setup tab, or `steward autostart --enable`) puts a small script in your Windows Startup folder that
 runs `steward app --no-window`. Without the dashboard: `steward run` (same loop, in a terminal).
 
@@ -343,6 +359,8 @@ Run the tests:
 - The IMAP/SMTP, Google Calendar, Notion, and LinkedIn-upstream backends are written against those services'
   documented APIs but have not been exercised against live accounts yet. Run `steward doctor` first, and start with
   everything on "Ask me" (the default) until you trust the drafts.
+- The WhatsApp upstream adapter is built against whatsapp-mcp-ts's tools (`list_chats`, `list_messages`,
+  `send_message`) and tested against that contract, not yet against a linked account.
 - The LinkedIn upstream adapter normalizes common response shapes; a specific toolkit may need its tool names (and
   occasionally its field names) mapped.
 - Outlook calendars are not built in; any calendar MCP server can be plugged in via `calendar.server`.

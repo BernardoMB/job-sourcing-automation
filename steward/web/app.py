@@ -48,10 +48,26 @@ STATIC = Path(__file__).resolve().parent / "static"
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "[::1]", "::1"}
 
 
+def page_token(cfg: Config) -> str:
+    """The token the page sends with every action. It is kept in the data folder so a window that stays open
+    across a restart of the background process keeps working."""
+    path = cfg.data_path / "dashboard_token"
+    try:
+        token = path.read_text(encoding="utf-8").strip()
+        if len(token) >= 24:
+            return token
+    except OSError:
+        pass
+    token = secrets.token_urlsafe(24)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(token, encoding="utf-8")
+    return token
+
+
 def create_app(cfg: Config, watch: bool = True, tick: int | None = None) -> FastAPI:
     steward = Steward(cfg)
     db, ledger = steward.db, steward.ledger
-    token = secrets.token_urlsafe(24)
+    token = page_token(cfg)
     lock = asyncio.Lock()
     meetings_cache: dict[str, Any] = {"at": 0.0, "data": []}
     state: dict[str, Any] = {"running": False, "last_error": "", "version": 0, "last_event": {}}
@@ -159,11 +175,48 @@ def create_app(cfg: Config, watch: bool = True, tick: int | None = None) -> Fast
         html = (STATIC / "index.html").read_text(encoding="utf-8")
         return html.replace("__STEWARD_TOKEN__", token)
 
-    # The page's icon, which is also what Edge/Chrome show in the taskbar for the app window.
-    @app.get("/app-logo.png")
+    # Icons — the .ico contains all Windows sizes; individual PNGs serve the manifest and HTML hints.
+    _ICONS = ASSETS / "logo" / "windows"
+
     @app.get("/favicon.ico")
+    async def favicon() -> FileResponse:
+        return FileResponse(_ICONS / "icon-256x256px.ico", media_type="image/x-icon")
+
+    @app.get("/app-logo.png")
     async def logo() -> FileResponse:
-        return FileResponse(ASSETS / "app-logo.png", media_type="image/png")
+        return FileResponse(_ICONS / "icon-256x256px.png", media_type="image/png")
+
+    @app.get("/icons/icon-16x16px.png")
+    async def icon_16() -> FileResponse:
+        return FileResponse(_ICONS / "icon-16x16px.png", media_type="image/png")
+
+    @app.get("/icons/icon-32x32px.png")
+    async def icon_32() -> FileResponse:
+        return FileResponse(_ICONS / "icon-32x32px.png", media_type="image/png")
+
+    @app.get("/icons/icon-48x48px.png")
+    async def icon_48() -> FileResponse:
+        return FileResponse(_ICONS / "icon-48x48px.png", media_type="image/png")
+
+    @app.get("/icons/icon-64x64px.png")
+    async def icon_64() -> FileResponse:
+        return FileResponse(_ICONS / "icon-64x64px.png", media_type="image/png")
+
+    @app.get("/icons/icon-128x128px.png")
+    async def icon_128() -> FileResponse:
+        return FileResponse(_ICONS / "icon-128x128px.png", media_type="image/png")
+
+    @app.get("/icons/icon-256x256px.png")
+    async def icon_256() -> FileResponse:
+        return FileResponse(_ICONS / "icon-256x256px.png", media_type="image/png")
+
+    @app.get("/manifest.json")
+    async def manifest_file() -> FileResponse:
+        return FileResponse(STATIC / "manifest.json", media_type="application/manifest+json")
+
+    @app.get("/browserconfig.xml")
+    async def browserconfig_xml() -> FileResponse:
+        return FileResponse(ASSETS / "logo" / "browserconfig.xml", media_type="application/xml")
 
     @app.get("/api/stream")
     async def stream(request: Request) -> StreamingResponse:
@@ -189,10 +242,12 @@ def create_app(cfg: Config, watch: bool = True, tick: int | None = None) -> Fast
         b["loop"] = {"watching": watch, "running": state["running"], "last_error": state["last_error"],
                      "tick": int(tick or C().dashboard.tick_seconds),
                      "polls": {"email": C().mail.poll_minutes, "calendar": C().calendar.poll_minutes,
-                               "linkedin": C().linkedin.poll_minutes}}
+                               "linkedin": C().linkedin.poll_minutes,
+                               "whatsapp": C().whatsapp.poll_minutes if C().whatsapp.backend != "disabled" else 0}}
         b["stages"] = STAGES
         b["settings"] = {"execute_on_approve": execute_on_approve()}
         b["linkedin_hours"] = C().linkedin.business_hours
+        b["whatsapp_hours"] = C().whatsapp.business_hours if C().whatsapp.backend != "disabled" else ""
         return b
 
     @app.get("/api/history")
@@ -204,7 +259,7 @@ def create_app(cfg: Config, watch: bool = True, tick: int | None = None) -> Fast
             decided = {"pending": "waiting for you", "approved": "approved (not run yet)",
                        "edited": "edited (not run yet)", "rejected": "rejected (not committed yet)",
                        "queued": "approved, queued", "executing": "running", "executed": "done",
-                       "deferred": "waiting (LinkedIn pacing)", "failed": "failed", "dismissed": "rejected",
+                       "deferred": "waiting (LinkedIn/WhatsApp pacing)", "failed": "failed", "dismissed": "rejected",
                        "superseded": "no longer needed", "discarded": "discarded by you"}.get(d["status"], d["status"])
             who = "Job Sourcer (rule)" if d["route"] != "ask" and d["status"] in ("executed", "queued", "executing") else \
                 ("you" if d["decided_at"] else "")
@@ -503,7 +558,8 @@ def create_app(cfg: Config, watch: bool = True, tick: int | None = None) -> Fast
     @app.post("/api/setup/probe/{name}")
     async def setup_probe(name: str) -> dict[str, Any]:
         tools = {"mail": ("whoami", {}), "calendar": ("pending_invites", {"days": 2}), "cv": ("get_profile", {}),
-                 "linkedin": ("upstream_tools", {"refresh": True}), "notion": ("notion_status", {})}
+                 "linkedin": ("upstream_tools", {"refresh": True}), "whatsapp": ("health", {}),
+                 "notion": ("notion_status", {})}
         if name == "llm":
             try:
                 out = await asyncio.to_thread(steward.llm.json, "critique", "Reply with the JSON object requested.",
@@ -535,6 +591,8 @@ def create_app(cfg: Config, watch: bool = True, tick: int | None = None) -> Fast
                                    f"{r['mapping'].get('list_conversations')} / {r['mapping'].get('get_conversation')}, "
                                    f"replying with {r['mapping'].get('send_message')}.") if r.get("tools")
             else f"backend {r.get('backend')}",
+            "whatsapp": lambda r: f"Connected ({r.get('backend')}): {r.get('chats')} chat(s) with messages from "
+                                  "others in the last 30 days.",
             "notion": lambda r: f"Database '{r.get('title')}' reachable",
         }[name](res)
         return {"ok": True, "detail": detail}

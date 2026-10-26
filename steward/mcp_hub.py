@@ -29,6 +29,7 @@ BUILTIN_MODULES = {
     "calendar": "steward.servers.calendar",
     "cv": "steward.servers.cv",
     "linkedin": "steward.servers.linkedin",
+    "whatsapp": "steward.servers.whatsapp",
     "notion": "steward.servers.notion",
 }
 
@@ -41,6 +42,7 @@ EXECUTOR_ONLY = {
     ("mail", "file_message"),
     ("linkedin", "toolkit_queue_decide"),
     ("linkedin", "send_message"),
+    ("whatsapp", "send_message"),
 }
 
 
@@ -81,6 +83,7 @@ class MCPHub:
             "mail": c.mail.backend != "disabled",
             "calendar": c.calendar.backend != "disabled",
             "linkedin": c.linkedin.backend != "disabled",
+            "whatsapp": c.whatsapp.backend != "disabled",
             "notion": c.notion.enabled,
             "cv": True,
         }.get(name, False)

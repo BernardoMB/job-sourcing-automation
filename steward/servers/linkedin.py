@@ -13,15 +13,14 @@ from __future__ import annotations
 import contextlib
 import json
 import os
-import random
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from steward.linkedin_adapt import UPSTREAM_RULES, adapt_args, pick_upstream_tool
-from steward.servers.common import READ_ONLY_REMOTE, WRITE, JsonStore, guarded, make_server, server_config
-from steward.timeutil import now_iso, parse_iso, to_iso, tz, utcnow
+from steward.servers.common import READ_ONLY_REMOTE, WRITE, JsonStore, Pacer, guarded, make_server, server_config
+from steward.timeutil import now_iso, parse_iso, to_iso, utcnow
 
 cfg = server_config()
 li_cfg = cfg.linkedin
@@ -29,44 +28,8 @@ mcp = make_server(
     "steward-linkedin",
     "Read LinkedIn conversations and (executor only) send human-paced replies through the user's own session.",
 )
-pacing = JsonStore(cfg.data_path / "linkedin_pacing.json", {"sends": [], "next_allowed_at": ""})
+pacer = Pacer(cfg.data_path / "linkedin_pacing.json", li_cfg, cfg.profile.timezone)
 INITIAL_LOOKBACK_DAYS = 7  # on the very first LinkedIn check, only threads active this past week
-
-
-# -- pacing -----------------------------------------------------------------
-def _pacing_check() -> dict[str, Any]:
-    state = pacing.load()
-    now = utcnow()
-    sends = [parse_iso(s) for s in state.get("sends", []) if parse_iso(s)]
-    sends = [s for s in sends if s > now - timedelta(days=1)]
-    last_hour = [s for s in sends if s > now - timedelta(hours=1)]
-    local = now.astimezone(tz(cfg.profile.timezone))
-    start_s, end_s = li_cfg.business_hours.split("-")
-    open_t = local.replace(hour=int(start_s[:2]), minute=int(start_s[3:5]), second=0, microsecond=0)
-    close_t = local.replace(hour=int(end_s[:2]), minute=int(end_s[3:5]), second=0, microsecond=0)
-    reason, retry = "", 0
-    next_allowed = parse_iso(state.get("next_allowed_at"))
-    if len(sends) >= li_cfg.daily_cap:
-        reason, retry = "daily cap reached", int((min(sends) + timedelta(days=1) - now).total_seconds()) + 60
-    elif len(last_hour) >= li_cfg.hourly_cap:
-        reason, retry = "hourly cap reached", int((min(last_hour) + timedelta(hours=1) - now).total_seconds()) + 60
-    elif not (open_t <= local < close_t):
-        target = open_t if local < open_t else open_t + timedelta(days=1)
-        reason, retry = "outside business hours", int((target - local).total_seconds()) + 60
-    elif next_allowed and now < next_allowed:
-        reason, retry = "pacing gap between sends", int((next_allowed - now).total_seconds()) + 1
-    return {"allowed": not reason, "reason": reason, "retry_after_seconds": max(retry, 0),
-            "sent_last_hour": len(last_hour), "sent_last_day": len(sends),
-            "hourly_cap": li_cfg.hourly_cap, "daily_cap": li_cfg.daily_cap}
-
-
-def _record_send() -> None:
-    state = pacing.load()
-    now = utcnow()
-    sends = [s for s in state.get("sends", []) if (parse_iso(s) or now) > now - timedelta(days=1)]
-    sends.append(to_iso(now))
-    gap = random.randint(li_cfg.min_delay_seconds, max(li_cfg.min_delay_seconds, li_cfg.max_delay_seconds))
-    pacing.save({"sends": sends, "next_allowed_at": to_iso(now + timedelta(seconds=gap))})
 
 
 # -- sandbox backend ----------------------------------------------------------
@@ -440,7 +403,7 @@ async def get_conversation(conversation_id: str, limit: int = 20) -> dict[str, A
 @guarded
 async def pacing_status() -> dict[str, Any]:
     """Whether a send is allowed right now, and current hourly/daily usage."""
-    return _pacing_check()
+    return pacer.check()
 
 
 @mcp.tool(annotations=READ_ONLY_REMOTE)
@@ -491,11 +454,11 @@ async def send_message(conversation_id: str, text: str, force: bool = False) -> 
 
     `force` is your explicit "Execute now": it skips business hours, caps, and the gap between sends.
     """
-    check = _pacing_check()
+    check = pacer.check()
     if not check["allowed"] and not force:
         return {"status": "deferred", "reason": check["reason"], "retry_after_seconds": check["retry_after_seconds"]}
     result = await backend().send(conversation_id, text)
-    _record_send()
+    pacer.record()
     return result
 
 

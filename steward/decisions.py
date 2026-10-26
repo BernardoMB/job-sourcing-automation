@@ -22,6 +22,7 @@ CLEAN = 0.98
 EDITABLE_FIELDS = {
     "send_email": {"to", "cc", "subject", "body"},
     "send_linkedin": {"text"},
+    "send_whatsapp": {"text"},
     "create_event": {"title", "start", "end", "description", "attendees"},
     "rsvp_event": {"response"},
 }
@@ -37,7 +38,7 @@ def message_text(actions: list[dict[str, Any]]) -> str:
             continue
         if a["type"] == "send_email":
             return a["payload"].get("body", "")
-        if a["type"] == "send_linkedin":
+        if a["type"] in ("send_linkedin", "send_whatsapp"):
             return a["payload"].get("text", "")
     return ""
 
@@ -87,7 +88,7 @@ def unfilled(actions: list[dict[str, Any]]) -> list[str]:
     """[NEEDS YOUR INPUT: ...] placeholders still in a reply that would be sent."""
     out: list[str] = []
     for a in actions:
-        if a.get("skip") or a.get("type") not in ("send_email", "send_linkedin"):
+        if a.get("skip") or a.get("type") not in ("send_email", "send_linkedin", "send_whatsapp"):
             continue
         p = a.get("payload") or {}
         out += PLACEHOLDER.findall(f"{p.get('subject', '')}\n{p.get('body') or p.get('text') or ''}")

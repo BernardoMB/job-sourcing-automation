@@ -1,12 +1,12 @@
 """Reconciliation: is each open item still needed?
 
-You can always bypass Job Sourcer: answer a recruiter yourself on LinkedIn or by
-email, or answer an invitation in your calendar. On every check, the open items
+You can always bypass Job Sourcer: answer a recruiter yourself on LinkedIn, on
+WhatsApp, or by email, or answer an invitation in your calendar. On every check, the open items
 of each source that was just checked are compared with what really happened:
 
-- LinkedIn: the conversation shows a message from you after theirs. If it is the
-  reply Job Sourcer drafted, the item is done; otherwise you answered yourself and
-  the item is closed (nothing is sent).
+- LinkedIn and WhatsApp: the conversation shows a message from you after theirs.
+  If it is the reply Job Sourcer drafted, the item is done; otherwise you answered
+  yourself and the item is closed (nothing is sent).
 - Email: your Sent folder has a reply to that thread (or to that person, same
   subject) that Job Sourcer did not send: closed.
 - Calendar: you already answered the invitation: closed.
@@ -57,11 +57,11 @@ def close(st, draft: dict[str, Any], reason: str, status: str = "superseded", le
                     draft_id=draft["id"], event_id=draft["event_id"])
 
 
-def _mark_sent(st, draft: dict[str, Any], reason: str) -> None:
+def _mark_sent(st, draft: dict[str, Any], reason: str, action_type: str = "send_linkedin") -> None:
     st.db.update("drafts", draft["id"], {"status": "executed", "status_reason": reason,
                                           "executed_at": draft["executed_at"] or now_iso()})
-    st.db.execute("UPDATE executions SET status = 'success', updated_at = ? WHERE draft_id = ? AND action_type = "
-                  "'send_linkedin' AND status != 'success'", (now_iso(), draft["id"]))
+    st.db.execute("UPDATE executions SET status = 'success', updated_at = ? WHERE draft_id = ? AND action_type = ? "
+                  "AND status != 'success'", (now_iso(), draft["id"], action_type))
     st.ledger.append("reconcile", {"status": "executed", "reason": reason, "previous_status": draft["status"],
                                    "summary": draft["summary"]}, event_id=draft["event_id"], draft_id=draft["id"])
     activity.record(st.db, "reconcile", f"{draft['summary']}: {reason}", draft_id=draft["id"], event_id=draft["event_id"])
@@ -137,21 +137,31 @@ async def toolkit_decide(hub: MCPHub, queue_id: str, approve: bool) -> str:
 
 async def linkedin(st, hub: MCPHub) -> int:
     """Close LinkedIn items you already answered in LinkedIn itself; mark ours done once they show up there."""
-    waiting = {x["draft_id"] for x in handed_off(st)}
-    drafts = [d for d in st.db.query(f"SELECT * FROM drafts WHERE channel = 'linkedin' AND (status IN {OPEN} OR "
+    return await _chat(st, hub, "linkedin", "LinkedIn")
+
+
+async def whatsapp(st, hub: MCPHub) -> int:
+    """Close WhatsApp items you already answered in WhatsApp itself; mark ours done once they show up there."""
+    return await _chat(st, hub, "whatsapp", "WhatsApp")
+
+
+async def _chat(st, hub: MCPHub, channel: str, label: str) -> int:
+    action_type = f"send_{channel}"
+    waiting = {x["draft_id"] for x in handed_off(st)} if channel == "linkedin" else set()
+    drafts = [d for d in st.db.query(f"SELECT * FROM drafts WHERE channel = ? AND (status IN {OPEN} OR "
                                      "(status = 'executed' AND id IN (SELECT draft_id FROM executions WHERE "
-                                     "status = 'handed_off')))")]
+                                     "status = 'handed_off')))", (channel,))]
     by_conv: dict[str, list[dict[str, Any]]] = {}
     for d in drafts:
         event = st.db.get_event(d["event_id"]) or {}
-        send = next((a for a in _actions(d) if a["type"] == "send_linkedin"), None)
+        send = next((a for a in _actions(d) if a["type"] == action_type), None)
         conv = (send or {}).get("payload", {}).get("conversation_id") or event.get("thread_key")
         if conv:
             by_conv.setdefault(conv, []).append(d)
     closed = 0
     for conv, ds in by_conv.items():
         try:
-            res = await hub.call("linkedin", "get_conversation", {"conversation_id": conv, "limit": 20})
+            res = await hub.call(channel, "get_conversation", {"conversation_id": conv, "limit": 20})
         except MCPToolError:
             continue
         msgs = res.get("messages", [])
@@ -161,26 +171,26 @@ async def linkedin(st, hub: MCPHub) -> int:
             mine = [m for m in msgs if m.get("from") == "me" and (parse_iso(m.get("sent_at")) or since) > since]
             if not mine:
                 continue
-            send = next((a for a in _actions(d) if a["type"] == "send_linkedin"), None)
+            send = next((a for a in _actions(d) if a["type"] == action_type), None)
             ours = (send or {}).get("payload", {}).get("text", "")
             last = mine[-1]
             when = fmt_local(last.get("sent_at"), st.cfg.profile.timezone)
             if ours and any(_same_text(m.get("text", ""), ours) for m in mine):
                 if d["status"] != "executed" or d["id"] in waiting:
-                    _mark_sent(st, d, f"Sent: it is in the LinkedIn conversation ({when}).")
+                    _mark_sent(st, d, f"Sent: it is in the {label} conversation ({when}).", action_type)
                     if not st.db.query_one("SELECT 1 FROM outbound WHERE draft_id = ?", (d["id"],)):
-                        _record_manual(st, d, "linkedin", conv, event.get("sender_name", ""), "", ours,
-                                       f"linkedin:{conv}:{last.get('id', '')}", last.get("sent_at") or now_iso())
+                        _record_manual(st, d, channel, conv, event.get("sender_name", ""), "", ours,
+                                       f"{channel}:{conv}:{last.get('id', '')}", last.get("sent_at") or now_iso())
                     closed += 1
                 continue
-            reason = f"You already replied on LinkedIn ({when}), so this is no longer needed. Nothing was sent."
+            reason = f"You already replied on {label} ({when}), so this is no longer needed. Nothing was sent."
             if d["id"] in waiting:  # don't let the toolkit send a second answer
                 qid = next((x["queue_id"] for x in handed_off(st) if x["draft_id"] == d["id"]), "")
                 if qid and await toolkit_decide(hub, qid, approve=False):
                     reason += " Also reject it in the LinkedIn toolkit popup, or it may still be sent."
             close(st, d, reason)
-            _record_manual(st, d, "linkedin", conv, event.get("sender_name", ""), "", last.get("text", ""),
-                           f"linkedin:{conv}:{last.get('id', '')}", last.get("sent_at") or now_iso())
+            _record_manual(st, d, channel, conv, event.get("sender_name", ""), "", last.get("text", ""),
+                           f"{channel}:{conv}:{last.get('id', '')}", last.get("sent_at") or now_iso())
             closed += 1
     return closed
 
@@ -250,7 +260,8 @@ async def run(st, hub: MCPHub, checked: dict[str, str], errors: list[str]) -> in
         return checked.get(source, "not due") not in ("not due", "off", "failed")
 
     changed = 0
-    steps = [("linkedin", sync_toolkit), ("linkedin", linkedin), ("email", email), ("calendar", calendar)]
+    steps = [("linkedin", sync_toolkit), ("linkedin", linkedin), ("whatsapp", whatsapp), ("email", email),
+             ("calendar", calendar)]
     for source, step in steps:
         if not was_checked(source):
             continue

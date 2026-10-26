@@ -17,7 +17,7 @@ from steward.vocab import find_technologies
 
 RECRUITING_WORDS = re.compile(
     r"\b(job|role|position|opportunit|recruit|hiring|interview|candidate|talent|offer|salary|compensation|"
-    r"resume|cv|headcount|team is growing|hiring manager|screen)",
+    r"resume|cv|headcount|team is growing|hiring manager|screen|vacante|reclut|entrevista|puesto)",
     re.IGNORECASE,
 )
 WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]

@@ -43,12 +43,21 @@ def test_dashboard_serves_the_logo_and_tests_the_sound(workspace, chimes):
     app = create_app(load_config(workspace), watch=False)
     with TestClient(app, base_url="http://127.0.0.1:8765") as client:
         page = client.get("/").text
-        assert '<link rel="icon" type="image/png" href="/app-logo.png">' in page and "<title>Job Sourcer</title>" in page
+        assert '<link rel="icon" type="image/x-icon" href="/favicon.ico">' in page and "<title>Job Sourcer</title>" in page
         token = page.split('const TOKEN = "')[1].split('"')[0]
-        for path in ("/app-logo.png", "/favicon.ico"):
-            res = client.get(path)
+        icons = ASSETS / "logo" / "windows"
+        res = client.get("/favicon.ico")  # the multi-size .ico: Windows picks the size it draws
+        assert res.status_code == 200 and res.headers["content-type"] == "image/x-icon"
+        assert res.content == (icons / "icon-256x256px.ico").read_bytes()
+        for size in (16, 32, 48, 64, 128, 256):
+            name = f"icon-{size}x{size}px.png"
+            assert f'href="/icons/{name}"' in page
+            res = client.get(f"/icons/{name}")
             assert res.status_code == 200 and res.headers["content-type"] == "image/png"
-            assert res.content == (ASSETS / "app-logo.png").read_bytes()
+            assert res.content == (icons / name).read_bytes()
+        assert client.get("/app-logo.png").content == (icons / "icon-256x256px.png").read_bytes()
+        assert client.get("/manifest.json").json()["icons"][-1]["sizes"] == "256x256"
+        assert client.get("/browserconfig.xml").status_code == 200
         assert client.post("/api/setup/sound-test").status_code == 403  # needs the page token like every action
         assert client.post("/api/setup/sound-test", headers={"X-Steward-Token": token}).json()["ok"]
         assert chimes == [sound.CHIME]
