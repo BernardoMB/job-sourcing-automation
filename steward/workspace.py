@@ -99,6 +99,10 @@ def init_workspace(target: Path, sandbox: bool, force: bool = False, cv_source: 
         cfg.linkedin.business_hours = "00:00-23:59"
         cfg.linkedin.min_delay_seconds = 0
         cfg.linkedin.max_delay_seconds = 0
+        cfg.whatsapp.backend = "sandbox"
+        cfg.whatsapp.business_hours = "00:00-23:59"
+        cfg.whatsapp.min_delay_seconds = 0
+        cfg.whatsapp.max_delay_seconds = 0
         cfg.llm.provider = "anthropic" if os.environ.get("ANTHROPIC_API_KEY") else "offline"
         cfg.dashboard.port = 8766  # so the demo never collides with your real Job Sourcer on 8765
         shutil.copy(PACKAGE_DATA / "cv.md", target / "cv" / "cv.md")
@@ -285,6 +289,23 @@ def seed_sandbox(cfg: Config, db: Database, now: datetime | None = None) -> None
     ]
     JsonStore(base / "linkedin.json", {}).save({"conversations": conversations, "sent": []})
 
+    # WhatsApp: one recruiter, and chats that are not about a job (ignored completely).
+    chats = [
+        {"id": "5215512345678@s.whatsapp.net", "name": "Mariana López", "messages": [
+            {"id": "wa-1", "from": "them", "sent_at": ago(2.5), "text": (
+                "Hola Alex, soy Mariana, reclutadora en Aurora Logistics. Tenemos una vacante de Senior Backend "
+                "Engineer (Python y AWS), 100% remoto. ¿Te interesaría una llamada de 20 minutos esta semana?")}]},
+        {"id": "5215598765432@s.whatsapp.net", "name": "Mamá", "messages": [
+            {"id": "wa-2", "from": "them", "sent_at": ago(1.5), "text": "¿Vienes a comer el domingo? Hice mole."}]},
+        {"id": "5215511122233@s.whatsapp.net", "name": "Diego", "messages": [
+            {"id": "wa-3", "from": "them", "sent_at": ago(1), "text": (
+                "Oye, salgo del trabajo a las 7, ¿nos vemos para el partido?")}]},
+        {"id": "120363000000000001@g.us", "name": "Familia", "messages": [
+            {"id": "wa-4", "from": "them", "sent_at": ago(0.5), "text": (
+                "Hay una vacante en la empresa de mi primo, ¿a alguien le interesa?")}]},
+    ]
+    JsonStore(base / "whatsapp.json", {}).save({"chats": chats, "sent": []})
+
     events: list[dict[str, Any]] = []
     day = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
     for i in range(0, 22):
@@ -341,6 +362,20 @@ def inject_email(cfg: Config, from_name: str, from_email: str, subject: str, bod
     })
     store.save(data)
     return uid
+
+
+def inject_whatsapp(cfg: Config, name: str, text: str, chat_id: str = "") -> str:
+    store = JsonStore(cfg.sandbox_path / "whatsapp.json", {"chats": [], "sent": []})
+    data = store.load()
+    chat = next((c for c in data["chats"] if c["id"] == chat_id), None) if chat_id else None
+    if chat is None:
+        chat_id = chat_id or f"52155{len(data['chats']):08d}@s.whatsapp.net"
+        chat = {"id": chat_id, "name": name, "messages": []}
+        data["chats"].append(chat)
+    chat["messages"].append({"id": f"wa-{len(chat['messages']) + 1}-{chat_id.split('@')[0]}", "from": "them",
+                             "sent_at": now_iso(), "text": text})
+    store.save(data)
+    return chat_id
 
 
 def inject_linkedin(cfg: Config, name: str, headline: str, text: str, conversation_id: str = "") -> str:

@@ -23,7 +23,13 @@ def find_for_event(db: Database, event: dict[str, Any], cls: dict[str, Any] | No
         if row:
             return row
     sender = (event.get("sender_address") or "").lower()
-    if sender:
+    if event.get("source") == "whatsapp":
+        number = digits(sender)
+        for o in db.query("SELECT * FROM opportunities WHERE ifnull(recruiter_phone, '') != '' "
+                          "ORDER BY updated_at DESC") if number else []:
+            if digits(o["recruiter_phone"]) == number:
+                return o
+    elif sender:
         row = db.query_one(
             "SELECT * FROM opportunities WHERE lower(recruiter_email) = ? OR lower(recruiter_linkedin) = ? "
             "ORDER BY updated_at DESC LIMIT 1", (sender, sender))
@@ -40,7 +46,7 @@ def find_for_event(db: Database, event: dict[str, Any], cls: dict[str, Any] | No
     return None
 
 
-def _digits(phone: str) -> str:
+def digits(phone: str) -> str:
     d = re.sub(r"\D", "", phone or "")
     return d[-10:] if len(d) >= 7 else ""
 
@@ -50,10 +56,10 @@ def find_for_call(db: Database, cls: dict[str, Any]) -> dict[str, Any] | None:
 
     A call from a recruiter Job Sourcer has never seen becomes a new lead when the company is known.
     """
-    number = _digits(cls.get("phone_number", ""))
+    number = digits(cls.get("phone_number", ""))
     if number:
         for o in db.query("SELECT * FROM opportunities WHERE recruiter_phone IS NOT NULL AND recruiter_phone != ''"):
-            if _digits(o["recruiter_phone"]) == number:
+            if digits(o["recruiter_phone"]) == number:
                 return o
     if cls.get("company"):
         row = db.query_one("SELECT * FROM opportunities WHERE lower(company) = ? ORDER BY updated_at DESC",
@@ -82,15 +88,17 @@ def upsert_for_event(db: Database, event: dict[str, Any], cls: dict[str, Any]) -
     proposed_stage = SIGNAL_TO_STAGE.get(cls.get("stage_signal", "none"), "")
     sender = (event.get("sender_address") or "").lower()
     is_linkedin = event["source"] == "linkedin"
+    is_chat = event["source"] in ("linkedin", "whatsapp")
+    phone = event.get("raw", {}).get("phone", "") if event["source"] == "whatsapp" else ""
     if opp is None:
         opp_id = db.insert("opportunities", {
-            "company": cls.get("company") or (_domain(sender).split(".")[0].title() if sender and not is_linkedin else ""),
+            "company": cls.get("company") or (_domain(sender).split(".")[0].title() if sender and not is_chat else ""),
             "role": cls.get("role", ""),
             "stage": proposed_stage or "new",
             "recruiter_name": cls.get("recruiter_name") or event.get("sender_name", ""),
-            "recruiter_email": "" if is_linkedin else sender,
+            "recruiter_email": "" if is_chat else sender,
             "recruiter_linkedin": event.get("raw", {}).get("profile_url", "") if is_linkedin else "",
-            "recruiter_phone": cls.get("phone_number", ""),
+            "recruiter_phone": phone or cls.get("phone_number", ""),
             "channel": event["source"],
             "location": cls.get("location", ""),
             "last_inbound_at": event.get("received_at") or stamp,
@@ -102,7 +110,7 @@ def upsert_for_event(db: Database, event: dict[str, Any], cls: dict[str, Any]) -
         updates: dict[str, Any] = {"updated_at": stamp, "last_inbound_at": event.get("received_at") or stamp}
         for field, value in (("company", cls.get("company")), ("role", cls.get("role")),
                              ("recruiter_name", cls.get("recruiter_name")), ("location", cls.get("location")),
-                             ("recruiter_phone", cls.get("phone_number"))):
+                             ("recruiter_phone", phone or cls.get("phone_number"))):
             if value and not opp.get(field):
                 updates[field] = value
         if proposed_stage:

@@ -46,7 +46,7 @@ async def plan(ctx: AgentContext, event: dict[str, Any], cls: dict[str, Any], ac
                          f"Subject: {event.get('subject') or ''}\n\n{event.get('body_text') or ''}"),
         block("steward_original_proposal", {"reply": message_text(actions),
                                             "other_actions": [a["type"] for a in actions
-                                                              if a["type"] not in ("send_email", "send_linkedin")]}),
+                                                              if a["type"] not in ("send_email", "send_linkedin", "send_whatsapp")]}),
         block("candidate_instruction", instruction),
     ])
     context = {"event": event, "classification": cls, "instruction": instruction, "now": now_local.isoformat(),

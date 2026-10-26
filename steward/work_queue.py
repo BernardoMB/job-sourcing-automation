@@ -15,7 +15,8 @@ from steward.config import Config
 from steward.db import Database, loads
 from steward.timeutil import fmt_local, parse_iso, to_iso, utcnow
 
-ACTION_LABELS = {"send_email": "Email reply", "send_linkedin": "LinkedIn reply", "create_event": "Book meeting",
+ACTION_LABELS = {"send_email": "Email reply", "send_linkedin": "LinkedIn reply", "send_whatsapp": "WhatsApp reply",
+                 "create_event": "Book meeting",
                  "rsvp_event": "Answer invitation", "add_to_calendar": "Add to calendar"}
 ACTIVE = ("approved", "edited", "rejected", "queued", "executing", "deferred", "failed")
 STAGED = ("approved", "edited", "rejected")  # decided in the briefing, confirmed (run) only when you press Go
@@ -59,6 +60,8 @@ def _target(action: dict[str, Any]) -> str:
         return ", ".join(p.get("to") or [])
     if action["type"] == "send_linkedin":
         return p.get("recipient") or "LinkedIn conversation"
+    if action["type"] == "send_whatsapp":
+        return p.get("recipient") or "WhatsApp chat"
     return p.get("title") or p.get("start", "")
 
 

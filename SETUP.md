@@ -12,8 +12,9 @@ one LinkedIn command in step 6.
 
 ## 0. Open Job Sourcer
 
-Double-click **`Start Job Sourcer.cmd`** in the project folder. It starts Job Sourcer in the background and opens its
-window (Edge/Chrome "app" window). Go to the **Setup** tab. Each step shows *Ready*, *Needs you*, or *Optional*.
+Double-click **`Start Job Sourcer.cmd`** in the project folder (or the **Job Sourcer** shortcut on your Desktop or in
+the Start menu; create them once with `steward shortcut`). It starts Job Sourcer in the background and opens its
+window. Go to the **Setup** tab. Each step shows *Ready*, *Needs you*, or *Optional*.
 
 (To play with fake data first, double-click **`Start Job Sourcer Demo.cmd`** instead.)
 
@@ -26,11 +27,12 @@ window (Edge/Chrome "app" window). Go to the **Setup** tab. Each step shows *Rea
 | 3 | Gmail App Password | myaccount.google.com | free | yes |
 | 4 | Google Calendar OAuth client (a JSON file) + one click to connect | console.cloud.google.com | free | yes |
 | 5 | linkedin-toolkit Chrome extension + pairing | your Chrome | free | for LinkedIn |
+| 5b | Scan one QR code with WhatsApp (`steward whatsapp-link`) | your phone | free | for WhatsApp |
 | 6 | Notion integration secret + a page | notion.so | free | optional |
 | 7 | ntfy topic or Telegram bot | ntfy.sh / Telegram | free | optional |
 | 8 | A phone number that emails you voicemails (Google Voice or carrier voicemail-to-email) | voice.google.com / your carrier | free | for calls |
 
-Nothing is sent anywhere except: Claude (to reason about messages), your own email/calendar/LinkedIn/Notion
+Nothing is sent anywhere except: Claude (to reason about messages), your own email/calendar/LinkedIn/WhatsApp/Notion
 accounts, and your notification service if you set one.
 
 ---
@@ -189,32 +191,69 @@ extensions and apps when Microsoft Edge is closed**.) On its first check Job Sou
 past 7 days. It then checks every 10 minutes and sends at most 8 messages an hour and 30 a day, only during
 business hours. Any LinkedIn automation carries some account risk.
 
-## 7. Notion (optional, Setup → step 7)
+## 7. WhatsApp (Setup → step 7)
+
+Job Sourcer reads and answers recruiters on WhatsApp the same way it does on LinkedIn: each new message in a
+one-to-one chat about a job opportunity is drafted, routed, and put in front of you (or handled under a rule you
+approved), and the reply goes back in the same chat. **Every other chat is ignored completely**: a chat that does not
+mention a job (in English or Spanish) is never stored, logged, or sent to Claude; one that mentions work but turns
+out to be personal is dropped after triage, with nothing of it kept. Group chats are never read, and Job Sourcer
+never writes in a group.
+
+It connects through the open-source [whatsapp-mcp-ts](https://github.com/jlucaso1/whatsapp-mcp-ts), linked to your
+account as a WhatsApp **linked device** (like WhatsApp Web). Node.js 23.10 or newer and git are needed (both are
+already installed on this computer).
+
+1. In a terminal in the project folder, run once:
+
+   ```bash
+   .venv/Scripts/steward.exe whatsapp-link
+   ```
+
+   It installs whatsapp-mcp-ts in `%USERPROFILE%\.whatsapp-mcp-ts`, sets Job Sourcer to use it, and shows a QR
+   code. Out of the box whatsapp-mcp-ts opens its QR code on quickchart.io, a public website; Job Sourcer removes
+   that line, so the code only appears in your terminal.
+2. On your phone, open WhatsApp → **Settings → Linked devices → Link a device**, and scan the code. Wait until the
+   terminal says *WhatsApp linked* (it stays connected a little longer to receive your recent chats).
+3. In Setup step 7, press **Test connection**.
+
+Your WhatsApp login and a copy of your messages stay in that folder on this computer (`auth_info/` and
+`data/whatsapp.db`). To unlink, remove "whatsapp-mcp-ts" under **Linked devices** on your phone, or delete
+`auth_info` and set the backend to `disabled`.
+
+On its first check Job Sourcer only looks at chats active in the past 7 days. It then checks every 5 minutes, and
+each check takes about 20 seconds longer while the linked device reconnects and receives what arrived meanwhile.
+Replies go out at most 8 an hour and 30 a day, only during the reply hours (09:00 to 19:00 by default). Linked-device
+tools are not an official WhatsApp API: like any automation of a personal account, they carry some risk of the
+account being restricted, so keep the caps low.
+
+## 8. Notion (optional, Setup → step 8)
 
 Job Sourcer always keeps your pipeline locally (Pipeline tab). Notion is an optional mirror you can also edit: if
 you move an opportunity to "Offer" there, Job Sourcer stops acting on its own for that thread.
 
 1. Go to https://www.notion.so/profile/integrations → **New integration** (type *Internal*), name it "Job Sourcer",
    copy the **Internal Integration Secret**.
-2. Paste it into **Notion integration secret** in Setup step 7 and press **Save**.
+2. Paste it into **Notion integration secret** in Setup step 8 and press **Save**.
 3. In Notion, create a page called "Job Search". On that page, open **••• → Connections** and add "Job Sourcer".
-4. Copy the page link (**Share → Copy link**), paste it into Setup step 7, press **Create the pipeline database**.
+4. Copy the page link (**Share → Copy link**), paste it into Setup step 8, press **Create the pipeline database**.
 
-## 8. Notifications (Setup → step 8)
+## 9. Notifications (Setup → step 9)
 
 Every check that brings new events (a recruiter message, a call, an invite, a moved or cancelled meeting) plays
 `assets/Tethys Nexus 5.mp3` on this computer, even when the window is closed. Mail filtered out as unrelated stays
-silent. Switch it off, or press **Play test sound**, in Setup step 8. To use another sound, set
+silent, and so is any WhatsApp chat that is not about a job. Switch it off, or press **Play test sound**, in Setup
+step 9. To use another sound, set
 `notifications.sound_file` in `steward.yaml`.
 
 The dashboard updates live, and the **🔔 Desktop alerts** button gives Windows notifications. To get alerts on
 your phone too:
 
 - **ntfy**: install the ntfy app, subscribe to a long random topic name, and paste `https://ntfy.sh/<topic>` in
-  Setup step 8.
+  Setup step 9.
 - **Telegram**: create a bot with @BotFather, paste its token, and paste your chat id.
 
-## 9. Start when you log in (Setup → step 9)
+## 10. Start when you log in (Setup → step 10)
 
 Turn this on so Job Sourcer keeps watching even when its window is closed. Turning it off removes the startup entry.
 

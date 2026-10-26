@@ -146,6 +146,29 @@ class LinkedInConfig(BaseModel):
         default_factory=lambda: ["npx", "-y", "-p", "linkedin-toolkit-mcp", "lit", "serve", "--http"])
 
 
+class WhatsAppConfig(BaseModel):
+    """WhatsApp chats about job opportunities; every other chat is ignored completely."""
+
+    backend: Literal["upstream", "sandbox", "disabled"] = "disabled"
+    poll_minutes: int = 5
+    hourly_cap: int = 8
+    daily_cap: int = 30
+    business_hours: str = "09:00-19:00"
+    min_delay_seconds: int = 30
+    max_delay_seconds: int = 120
+    # On the very first check, only chats active this many days back.
+    initial_lookback_days: int = 7
+    # How many chats (most recently active first) each check looks at.
+    max_chats: int = 40
+    # Group chats are never read unless this is on (recruiters write one to one).
+    include_groups: bool = False
+    # The upstream WhatsApp MCP server, linked to your account as a WhatsApp "linked device" (for example
+    # whatsapp-mcp-ts). One started per check needs a moment to receive what arrived while it was offline.
+    upstream: ServerSpec | None = None
+    settle_seconds: int = 20
+    server: ServerSpec | None = None
+
+
 class NotionConfig(BaseModel):
     enabled: bool = False
     token_env: str = "NOTION_TOKEN"
@@ -218,6 +241,7 @@ class Config(BaseModel):
     calendar: CalendarConfig = Field(default_factory=CalendarConfig)
     scheduling: SchedulingConfig = Field(default_factory=SchedulingConfig)
     linkedin: LinkedInConfig = Field(default_factory=LinkedInConfig)
+    whatsapp: WhatsAppConfig = Field(default_factory=WhatsAppConfig)
     notion: NotionConfig = Field(default_factory=NotionConfig)
     cv: CVConfig = Field(default_factory=CVConfig)
     autonomy: AutonomyConfig = Field(default_factory=AutonomyConfig)

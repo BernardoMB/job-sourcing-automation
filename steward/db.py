@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS kv (
 
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY,
-    source TEXT NOT NULL,                 -- email | linkedin | calendar | steward
+    source TEXT NOT NULL,                 -- email | linkedin | whatsapp | calendar | steward
     external_id TEXT NOT NULL,
     thread_key TEXT,
     sender_name TEXT,

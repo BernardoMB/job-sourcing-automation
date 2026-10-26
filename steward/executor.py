@@ -23,7 +23,8 @@ from steward.ledger import Ledger
 from steward.mcp_hub import ExecutorCapability, MCPHub
 from steward.timeutil import fmt_local, now_iso, parse_iso, to_iso, utcnow
 
-ACTION_LABELS = {"send_email": "email reply", "send_linkedin": "LinkedIn reply", "create_event": "meeting booking",
+ACTION_LABELS = {"send_email": "email reply", "send_linkedin": "LinkedIn reply", "send_whatsapp": "WhatsApp reply",
+                 "create_event": "meeting booking",
                  "rsvp_event": "invitation answer", "add_to_calendar": "add to calendar"}
 
 
@@ -129,7 +130,8 @@ class Executor:
                     "status": "deferred", "result_json": dumps(result), "updated_at": now_iso(),
                     "next_attempt_at": to_iso(utcnow() + timedelta(seconds=retry)),
                 })
-                final_status, reason = "deferred", f"LinkedIn pacing: {result.get('reason', 'waiting')}"
+                where = "WhatsApp" if action["type"] == "send_whatsapp" else "LinkedIn"
+                final_status, reason = "deferred", f"{where} pacing: {result.get('reason', 'waiting')}"
                 outcomes.append({"index": index, "type": action["type"], "status": "deferred", "retry_in": retry})
                 break
             self.db.update("executions", exec_id, {
@@ -198,8 +200,8 @@ class Executor:
                 "to": p["to"], "subject": p.get("subject", ""), "body": p["body"], "cc": p.get("cc") or [],
                 "in_reply_to": p.get("in_reply_to", ""), "references": p.get("references") or [],
             }, capability=self._cap)
-        if kind == "send_linkedin":
-            return await self.hub.call("linkedin", "send_message",
+        if kind in ("send_linkedin", "send_whatsapp"):
+            return await self.hub.call(kind.removeprefix("send_"), "send_message",
                                        {"conversation_id": p["conversation_id"], "text": p["text"], "force": force},
                                        capability=self._cap)
         if kind == "add_to_calendar":
@@ -238,11 +240,11 @@ class Executor:
         p = action["payload"]
         kind = action["type"]
         opp_id = draft["opportunity_id"]
-        if kind in ("send_email", "send_linkedin"):
+        if kind in ("send_email", "send_linkedin", "send_whatsapp"):
             body = p.get("body") if kind == "send_email" else p.get("text")
             ext = result.get("message_id", "")
             self.db.insert("outbound", {
-                "draft_id": draft["id"], "channel": "email" if kind == "send_email" else "linkedin",
+                "draft_id": draft["id"], "channel": kind.removeprefix("send_"),
                 "thread_key": event.get("thread_key"), "recipient": ", ".join(p.get("to", [])) or p.get("recipient", ""),
                 "subject": p.get("subject", ""), "body": body, "external_id": ext, "sent_at": now_iso(),
             })

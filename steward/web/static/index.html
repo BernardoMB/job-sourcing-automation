@@ -4,7 +4,26 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Job Sourcer</title>
-<link rel="icon" type="image/png" href="/app-logo.png">
+<link rel="icon" type="image/x-icon" href="/favicon.ico">
+<link rel="icon" type="image/png" sizes="256x256" href="/icons/icon-256x256px.png">
+<link rel="icon" type="image/png" sizes="128x128" href="/icons/icon-128x128px.png">
+<link rel="icon" type="image/png" sizes="64x64" href="/icons/icon-64x64px.png">
+<link rel="icon" type="image/png" sizes="48x48" href="/icons/icon-48x48px.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/icons/icon-32x32px.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/icons/icon-16x16px.png">
+<link rel="apple-touch-icon" sizes="256x256" href="/icons/icon-256x256px.png">
+<link rel="manifest" href="/manifest.json">
+<meta name="msapplication-config" content="/browserconfig.xml">
+<meta name="theme-color" content="#2f5d50">
+<script>
+// Appearance: "system" follows Windows (or the browser), "light"/"dark" override it. Set before the page paints.
+(function () {
+  let pref = "system";
+  try { pref = JSON.parse(localStorage.getItem("steward.theme")) || "system"; } catch (e) {}
+  const dark = pref === "dark" || (pref !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
+  document.documentElement.dataset.theme = dark ? "dark" : "light";
+})();
+</script>
 <style>
 :root {
   --bg: #f6f5f2; --panel: #ffffff; --ink: #1d1f23; --muted: #646a73; --line: #e3e1db;
@@ -13,15 +32,15 @@
   --ok: #1e6b3a; --ok-soft: #e3f3e8; --info: #2b4f8a; --info-soft: #e6edf8; --violet: #5b3d8f; --violet-soft: #efe8f8;
   --shadow: 0 1px 2px rgba(20,20,20,.06), 0 2px 8px rgba(20,20,20,.04);
   --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  color-scheme: light;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
+:root[data-theme="dark"] {
     --bg: #15171a; --panel: #1e2125; --ink: #e8e6e1; --muted: #a0a5ad; --line: #30343a;
     --accent: #7fc1a9; --accent-ink: #0f1a16; --accent-soft: #1f3029;
     --high: #ff8a80; --high-soft: #3a2220; --warn: #f0c060; --warn-soft: #3a3020; --ok: #7fd49a; --ok-soft: #1d3326;
     --info: #9dbcf0; --info-soft: #1f2a3d; --violet: #c6a8f0; --violet-soft: #2c2440;
     --shadow: none;
-  }
+    color-scheme: dark;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
@@ -30,6 +49,7 @@ input, textarea, select { background: var(--panel); border: 1px solid var(--line
 a { color: var(--info); }
 header.top { position: sticky; top: 0; z-index: 5; background: var(--panel); border-bottom: 1px solid var(--line); }
 .top-inner { max-width: 1240px; margin: 0 auto; padding: 10px 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.logo { width: 32px; height: 32px; flex: none; margin-right: -2px; }
 .brand { display: flex; flex-direction: column; margin-right: auto; min-width: 0; }
 .brand b { font-size: 18px; letter-spacing: .2px; }
 .brand span { color: var(--muted); font-size: 12.5px; }
@@ -43,6 +63,11 @@ header.top { position: sticky; top: 0; z-index: 5; background: var(--panel); bor
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
 .btn.danger { color: var(--high); }
 .btn.small { padding: 4px 10px; font-size: 13px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { border: 0; background: var(--panel); color: var(--muted); padding: 4px 10px; font-size: 13px; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button:hover { color: var(--ink); }
+.seg button[aria-pressed="true"] { background: var(--accent-soft); color: var(--ink); font-weight: 600; }
 .switch { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); cursor: pointer; }
 nav.tabs { max-width: 1240px; margin: 0 auto; padding: 0 16px; display: flex; gap: 4px; overflow-x: auto; }
 nav.tabs button { border: 0; background: none; padding: 10px 12px; border-bottom: 2px solid transparent; cursor: pointer; color: var(--muted); white-space: nowrap; }
@@ -154,10 +179,14 @@ tr.detail td { background: var(--bg); }
 <body>
 <header class="top">
   <div class="top-inner">
+    <img class="logo" src="/icons/icon-32x32px.png" srcset="/icons/icon-32x32px.png 1x, /icons/icon-48x48px.png 1.5x, /icons/icon-64x64px.png 2x, /icons/icon-128x128px.png 4x" width="32" height="32" alt="">
     <div class="brand"><b>Job Sourcer</b><span id="status"><span class="dot off"></span>Loading...</span></div>
     <label class="switch" title="When on, each approval is sent/booked right away instead of waiting for Go"><input type="checkbox" id="instant"> Act on each approval immediately</label>
+    <div class="seg" id="themeSeg" role="group" aria-label="Appearance" title="Appearance: follow Windows, or always light or dark">
+      <button type="button" data-pref="system">System</button><button type="button" data-pref="light">Light</button><button type="button" data-pref="dark">Dark</button>
+    </div>
     <button class="btn small" id="alertsBtn" title="Show a desktop notification when something needs you">🔔 Desktop alerts</button>
-    <button class="btn" id="pollBtn" title="Check email, LinkedIn and calendar now">Check now</button>
+    <button class="btn" id="pollBtn" title="Check email, LinkedIn, WhatsApp and calendar now">Check now</button>
     <button class="btn primary" id="goBtn" title="Commit your decisions and execute them in one batch">Go</button>
   </div>
   <nav class="tabs" id="tabs">
@@ -208,8 +237,19 @@ async function api(path, method = "GET", body) {
   if (body !== undefined) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
   const r = await fetch(path, opts);
   const data = await r.json().catch(() => ({}));
+  if (r.status === 403 && data.error === "missing or invalid token") staleToken();
   if (!r.ok) throw new Error(data.detail || data.error || r.statusText);
   return data;
+}
+// This page was opened by an earlier Job Sourcer process, so its token is not accepted any more: load the page
+// again for the current one (once a minute at most, so a real problem cannot loop).
+function staleToken() {
+  let last = 0;
+  try { last = Number(sessionStorage.getItem("steward.tokenReload") || 0); } catch (e) {}
+  if (Date.now() - last < 60000) return;
+  try { sessionStorage.setItem("steward.tokenReload", String(Date.now())); } catch (e) {}
+  toast("Job Sourcer was restarted: reloading the page…", 3000);
+  setTimeout(() => location.reload(), 600);
 }
 function toast(msg, ms = 4000) {
   if (!msg) return;
@@ -312,7 +352,7 @@ function renderHeader() {
   const c = B.counts, loop = B.loop;
   const last = B.last_cycle && B.last_cycle.at ? new Date(B.last_cycle.at).toLocaleTimeString() : "not yet";
   const dot = !loop.watching ? "off" : loop.running ? "busy" : "";
-  const watching = loop.watching ? `Watching: email every ${loop.polls.email} min, calendar ${loop.polls.calendar} min, LinkedIn ${loop.polls.linkedin} min` : "Not watching (started with --no-watch)";
+  const watching = loop.watching ? `Watching: email every ${loop.polls.email} min, calendar ${loop.polls.calendar} min, LinkedIn ${loop.polls.linkedin} min${loop.polls.whatsapp ? `, WhatsApp ${loop.polls.whatsapp} min` : ""}` : "Not watching (started with --no-watch)";
   $("#status").innerHTML = `<span class="dot ${dot}"></span>${esc(watching)} · last check ${esc(last)} · ${esc(B.llm.provider)} (${esc(B.llm.model)})${loop.last_error ? " · ⚠ " + esc(loop.last_error) : ""}`;
   const paused = B.llm.paused;
   const pb = $("#pauseBanner");
@@ -335,7 +375,30 @@ function renderHeader() {
   qb.title = `${c.staged || 0} pending confirmation (press Go), ${c.in_flight || 0} queued, running, deferred, or failed`;
   tb.title = `${c.tasks_open || 0} open, ${c.tasks_suggested || 0} suggested, ${c.tasks_due_soon || 0} due within 48 h or overdue`;
   document.title = c.undecided ? `(${c.undecided}) Job Sourcer` : "Job Sourcer";
+  syncWindowTitle();
 }
+// In the Job Sourcer window (window.py) the title bar and taskbar follow the page title through its bridge.
+function syncWindowTitle() {
+  try { if (window.pywebview && window.pywebview.api) window.pywebview.api.set_title(document.title); } catch (e) {}
+}
+window.addEventListener("pywebviewready", syncWindowTitle);
+
+// Appearance (System / Light / Dark), remembered in this browser; the window's title bar follows it.
+const darkQuery = matchMedia("(prefers-color-scheme: dark)");
+function applyTheme() {
+  const pref = store.get("theme", "system");
+  const dark = pref === "dark" || (pref !== "light" && darkQuery.matches);
+  document.documentElement.dataset.theme = dark ? "dark" : "light";
+  document.querySelectorAll("#themeSeg button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.pref === pref)));
+  try { if (window.pywebview && window.pywebview.api) window.pywebview.api.set_dark(dark); } catch (e) {}
+}
+$("#themeSeg").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-pref]");
+  if (b) { store.set("theme", b.dataset.pref); applyTheme(); }
+});
+darkQuery.addEventListener("change", applyTheme);
+window.addEventListener("pywebviewready", applyTheme);
+applyTheme();
 function notifyDesktop(title, body) {
   try { if ("Notification" in window && Notification.permission === "granted") new Notification(title, { body }); } catch (e) {}
 }
@@ -365,7 +428,13 @@ function startStream() {
     } else if (tab !== "ledger" && tab !== "setup") refresh();
     else api("/api/briefing").then(b => { B = b; renderHeader(); });
   };
-  es.onerror = () => { const d = $("#status .dot"); if (d) d.className = "dot off"; };
+  es.onerror = () => {
+    const d = $("#status .dot"); if (d) d.className = "dot off";
+    // The stream cannot say why it failed: ask once whether the token is the reason.
+    const ctl = new AbortController();
+    fetch(`/api/stream?token=${encodeURIComponent(TOKEN)}`, { signal: ctl.signal })
+      .then(r => { ctl.abort(); if (r.status === 403) staleToken(); }).catch(() => {});
+  };
 }
 
 // ---------- briefing ----------
@@ -400,6 +469,9 @@ function actionEditor(v, a, i) {
       <textarea data-f="body" style="margin-top:6px" ${dis}>${esc(p.body)}</textarea>${skip}</div>`;
   if (a.type === "send_linkedin") return `<div class="action" data-i="${i}" data-type="send_linkedin">
       <label class="t">Reply on LinkedIn to ${esc(p.recipient || "")}</label>
+      <textarea data-f="text" ${dis}>${esc(p.text)}</textarea>${skip}</div>`;
+  if (a.type === "send_whatsapp") return `<div class="action" data-i="${i}" data-type="send_whatsapp">
+      <label class="t">Reply on WhatsApp to ${esc(p.recipient || "")}</label>
       <textarea data-f="text" ${dis}>${esc(p.text)}</textarea>${skip}</div>`;
   if (a.type === "create_event") return `<div class="action" data-i="${i}" data-type="create_event">
       <label class="t">Book meeting (invite ${esc((p.attendees || []).join(", "))})</label>
@@ -516,9 +588,9 @@ function taskBlock(list) {
 }
 function handledCard(v) {
   const sent = v.actions.map(a => a.type === "send_email" ? `Email to ${esc((a.payload.to || []).join(", "))}:\n${esc(a.payload.body)}`
-    : a.type === "send_linkedin" ? `LinkedIn:\n${esc(a.payload.text)}` : a.type === "create_event" ? `Booked: ${esc(a.payload.title)} ${esc(a.payload.start)}`
+    : a.type === "send_linkedin" ? `LinkedIn:\n${esc(a.payload.text)}` : a.type === "send_whatsapp" ? `WhatsApp:\n${esc(a.payload.text)}` : a.type === "create_event" ? `Booked: ${esc(a.payload.title)} ${esc(a.payload.start)}`
     : `RSVP ${esc(a.payload.response)}`).join("\n\n");
-  const body = v.actions.find(a => a.type === "send_email" || a.type === "send_linkedin");
+  const body = v.actions.find(a => a.type === "send_email" || a.type === "send_linkedin" || a.type === "send_whatsapp");
   const text = body ? (body.payload.body || body.payload.text || "") : "";
   return `<article class="card" data-id="${v.id}">
     <div class="card-head"><span class="chip ok">done</span><h3>${esc(v.summary)}</h3></div>
@@ -774,7 +846,7 @@ document.addEventListener("click", (e) => {
 const when = (iso) => iso ? new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
 const QUEUE_CHIP = { deferred: "warn", failed: "bad", executed: "ok", executing: "info", queued: "info", discarded: "", superseded: "", approved: "violet", edited: "violet", rejected: "violet" };
 const queueMenu = (r) => `<details class="dd"><summary class="btn small">Actions ▾</summary><div class="dd-menu">
-  <button class="btn small" data-reexec="${r.id}" ${r.can_reexecute ? "" : "disabled"} title="${r.can_reexecute ? "Run it again now (skips LinkedIn business hours and pacing)" : "Nothing to run: it is done or closed"}">Re-execute</button>
+  <button class="btn small" data-reexec="${r.id}" ${r.can_reexecute ? "" : "disabled"} title="${r.can_reexecute ? "Run it again now (skips LinkedIn and WhatsApp business hours and pacing)" : "Nothing to run: it is done or closed"}">Re-execute</button>
   <button class="btn small danger" data-discard="${r.id}" ${r.can_discard ? "" : "disabled"} title="${r.can_discard ? "It will not run" : "It is done or closed already"}">Discard</button></div></details>`;
 async function renderQueue() {
   const { items } = await api("/api/queue");
@@ -795,7 +867,7 @@ async function renderQueue() {
     ${waiting.length ? `<h2 class="sec">Waiting <span class="count">${waiting.length}</span></h2>
       ${waiting.map(r => card(r, "warn", r.can_execute ? `<button class="btn small primary" data-exec="${r.id}">Execute now</button>` : "")).join("")}` : ""}
     <h2 class="sec">Everything in the queue</h2>
-    <p class="meta">Every decided action that has not finished, and what finished in the last day. LinkedIn replies wait for business hours (${esc(B.linkedin_hours || "set in steward.yaml")}); <b>Execute</b> sends one now. Click a row for each action's status.</p><div id="queueTable"></div>`;
+    <p class="meta">Every decided action that has not finished, and what finished in the last day. LinkedIn replies wait for business hours (${esc(B.linkedin_hours || "set in steward.yaml")})${B.whatsapp_hours ? `, WhatsApp replies too (${esc(B.whatsapp_hours)})` : ""}; <b>Execute</b> sends one now. Click a row for each action's status.</p><div id="queueTable"></div>`;
   dataTable($("#queueTable"), {
     id: "queue", rows: items, noun: "actions", defaultSort: { key: "updated", dir: "desc" },
     columns: [
@@ -819,14 +891,14 @@ document.addEventListener("click", async (ev) => {
   if (!re && !di) { document.querySelectorAll("details.dd[open]").forEach(d => { if (!d.contains(ev.target)) d.open = false; }); return; }
   const b = re || di, menu = b.closest("details");
   if (menu) menu.open = false;
-  if (re && !confirm("Re-execute it now? It skips Job Sourcer's LinkedIn business hours and pacing. If it may already have gone out, check the conversation first.")) return;
+  if (re && !confirm("Re-execute it now? It skips Job Sourcer's LinkedIn and WhatsApp business hours and pacing. If it may already have gone out, check the conversation first.")) return;
   if (di && !confirm("Discard it? It will not be sent or done.")) return;
   await act(() => api(`/api/drafts/${b.dataset.reexec || b.dataset.discard}/${re ? "reexecute" : "discard"}`, "POST", {}), queueResult);
 });
 document.addEventListener("click", async (ev) => {
   const b = ev.target.closest("[data-exec]");
   if (!b) return;
-  if (!confirm("Execute it now? This skips Job Sourcer's LinkedIn business hours and pacing for this one item.")) return;
+  if (!confirm("Execute it now? This skips Job Sourcer's LinkedIn and WhatsApp business hours and pacing for this one item.")) return;
   b.disabled = true; b.textContent = "Executing…";
   await act(() => api(`/api/drafts/${b.dataset.exec}/execute`, "POST", {}), queueResult);
 });
@@ -1054,15 +1126,18 @@ async function renderSetup() {
       <div class="meta">Get the token with: <span class="mono">npx -y -p linkedin-toolkit-mcp lit config get token --reveal</span></div>
       <div class="grid2">${field("linkedin.backend", "Backend", ["disabled", "upstream", "sandbox"])}</div>
       <div class="buttons"><button class="btn small primary" id="liUse">Use linkedin-toolkit</button>${save(["linkedin.backend"], "Save backend")} ${test("linkedin")}</div>`)}
-    ${step(7, "notion", "Notion pipeline (optional)", `${secret("NOTION_TOKEN")}
+    ${step(7, "whatsapp", "WhatsApp (your own account)", `<div class="meta">Reads one-to-one chats through whatsapp-mcp-ts, linked to your WhatsApp as a linked device (like WhatsApp Web). Only chats about a job are kept and answered; every other chat is ignored completely. Groups are never read. To install and link it, run <span class="mono">steward whatsapp-link</span> in a terminal once and scan the QR code with WhatsApp (Settings &gt; Linked devices).</div>
+      <div class="grid2">${field("whatsapp.backend", "Backend", ["disabled", "upstream", "sandbox"])}${field("whatsapp.business_hours", "Reply hours")}</div>
+      <div class="buttons">${save(["whatsapp.backend", "whatsapp.business_hours"])} ${test("whatsapp")}</div>`)}
+    ${step(8, "notion", "Notion pipeline (optional)", `${secret("NOTION_TOKEN")}
       <div class="row"><input type="text" id="notionPage" placeholder="Link to a Notion page shared with your integration" style="flex:1"><button class="btn small" id="notionBtn">Create the pipeline database</button></div>
       <div class="buttons">${test("notion")}</div>`)}
-    ${step(8, "notifications", "Notifications", `<label class="switch"><input type="checkbox" id="soundOn" ${v["notifications.sound"] ? "checked" : ""}> Play a sound on this computer when new events arrive (a recruiter message, call, invite, or meeting change)</label>
+    ${step(9, "notifications", "Notifications", `<label class="switch"><input type="checkbox" id="soundOn" ${v["notifications.sound"] ? "checked" : ""}> Play a sound on this computer when new events arrive (a recruiter message, call, invite, or meeting change)</label>
       <div class="buttons"><button class="btn small" id="soundTest">Play test sound</button><span class="result" id="soundResult"></span></div>
       <div class="meta">Phone notifications (optional):</div>
       <div class="grid2">${field("notifications.ntfy_url", "ntfy topic URL", "text", "e.g. https://ntfy.sh/your-long-random-topic")}${field("notifications.telegram_chat_id", "Telegram chat id")}${field("notifications.quiet_hours", "Quiet hours")}</div>
       ${secret("TELEGRAM_BOT_TOKEN")}<div class="buttons"><button class="btn small primary" id="notifSave">Save</button></div>`)}
-    ${step(9, "autostart", "Start when you log in", `<label class="switch"><input type="checkbox" id="autoStart" ${S.autostart ? "checked" : ""} ${S.autostart_supported ? "" : "disabled"}> Start Job Sourcer automatically at Windows login (keeps watching even if this window is closed)</label>`)}
+    ${step(10, "autostart", "Start when you log in", `<label class="switch"><input type="checkbox" id="autoStart" ${S.autostart ? "checked" : ""} ${S.autostart_supported ? "" : "disabled"}> Start Job Sourcer automatically at Windows login (keeps watching even if this window is closed)</label>`)}
   `;
   host.querySelectorAll("[data-tz]").forEach(a => a.addEventListener("click", (e) => { e.preventDefault(); host.querySelector('[data-k="profile.timezone"]').value = a.dataset.tz; }));
   host.querySelectorAll("[data-save]").forEach(b => b.addEventListener("click", () => {

@@ -11,6 +11,13 @@ from pathlib import Path
 from typing import Any, Optional
 
 import typer
+
+if sys.stdout is None or sys.stderr is None:  # started by pythonw (the shortcut): no console to print to
+    import os
+
+    sys.stdout = sys.stdout or open(os.devnull, "w", encoding="utf-8")
+    sys.stderr = sys.stderr or open(os.devnull, "w", encoding="utf-8")
+
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
@@ -130,7 +137,7 @@ def doctor() -> None:
 
     async def probe() -> None:
         async with MCPHub(c) as hub:
-            for name in ("cv", "mail", "calendar", "linkedin", "notion"):
+            for name in ("cv", "mail", "calendar", "linkedin", "whatsapp", "notion"):
                 if not hub.enabled(name):
                     row(f"MCP {name}", None, "disabled")
                     continue
@@ -143,8 +150,8 @@ def doctor() -> None:
                     if name == "notion":
                         st = await hub.call("notion", "notion_status", {})
                         detail += f", database '{st['title']}'"
-                    if name == "linkedin":
-                        ps = await hub.call("linkedin", "pacing_status", {})
+                    if name in ("linkedin", "whatsapp"):
+                        ps = await hub.call(name, "pacing_status", {})
                         detail += f", {ps['sent_last_day']}/{ps['daily_cap']} sends today"
                     row(f"MCP {name}", True, detail)
                 except Exception as exc:  # noqa: BLE001
@@ -264,7 +271,7 @@ def _render_item(v: dict[str, Any], full: bool = False) -> Panel:
     for a in v["actions"]:
         p = a["payload"]
         skip = " [dim](skipped)[/dim]" if a.get("skip") else ""
-        if a["type"] in ("send_email", "send_linkedin"):
+        if a["type"] in ("send_email", "send_linkedin", "send_whatsapp"):
             text = p.get("body") or p.get("text") or ""
             lines.append(f"[bold]Proposed reply ({a['type'].replace('send_', '')})[/bold]{skip}:")
             lines.append(escape(text if full else text[:700]))
@@ -421,7 +428,7 @@ def dont_ask(draft_id: int,
              tech: list[str] = typer.Option([], "--tech", help="Limit the rule to these technologies (repeatable)"),
              sender: str = typer.Option("", help="Limit to a sender address or @domain"),
              company: str = typer.Option("", help="Limit to a company"),
-             channel: list[str] = typer.Option([], "--channel", help="Limit to email/linkedin/calendar"),
+             channel: list[str] = typer.Option([], "--channel", help="Limit to email/linkedin/whatsapp/calendar"),
              min_confidence: Optional[float] = typer.Option(None, help="Still ask me below this confidence")) -> None:
     """"Don't ask me again" for this kind of decision: creates a rule and approves this draft."""
     c, db, ledger = _db_ledger()
@@ -744,11 +751,22 @@ def _running(url: str, config_path: str = "") -> str:
 
 
 def _open_window(url: str) -> None:
-    """Open the dashboard as an app window (Edge/Chrome app mode), else in the default browser."""
+    """Open the dashboard: Job Sourcer's own window (sharp taskbar icon), else an Edge/Chrome app window,
+    else the default browser."""
     import os
     import shutil
     import subprocess
     import webbrowser
+
+    from steward import window
+
+    if window.available():
+        python = Path(sys.executable).with_name("pythonw.exe")
+        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        subprocess.Popen([str(python if python.exists() else sys.executable), "-m", "steward", "-c", cfg().config_path,
+                          "window"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         creationflags=flags, close_fds=True)
+        return
 
     candidates = [shutil.which("msedge"), shutil.which("chrome")]
     for base in (os.environ.get("ProgramFiles(x86)", ""), os.environ.get("ProgramFiles", ""),
@@ -761,6 +779,29 @@ def _open_window(url: str) -> None:
             subprocess.Popen([exe, f"--app={url}"], close_fds=True)
             return
     webbrowser.open(url)
+
+
+@app.command("window")
+def window_cmd() -> None:
+    """Open the Job Sourcer window (the dashboard with its own taskbar icon). Blocks until it is closed."""
+    from steward import window
+
+    c = cfg()
+    if not window.available():
+        fail("The Job Sourcer window needs pywebview and Microsoft WebView2 (Windows); use `steward app` instead.")
+    window.run(f"http://{c.dashboard.host}:{c.dashboard.port}", c.data_path / "window")
+
+
+@app.command()
+def shortcut() -> None:
+    """Create Job Sourcer shortcuts on the Desktop and in the Start menu (sharp icon, no console)."""
+    from steward import shortcuts
+
+    try:
+        for path in shortcuts.create(cfg()):
+            console.print(f"[green]Created[/green] {path}")
+    except (RuntimeError, OSError) as exc:
+        fail(str(exc))
 
 
 @app.command("app")
@@ -830,6 +871,50 @@ def sandbox_linkedin(name: str = typer.Option(...), text: str = typer.Option(...
 
     cid = inject_linkedin(cfg(), name, headline, text, conversation)
     console.print(f"Injected sandbox LinkedIn message in {cid}.")
+
+
+@app.command("whatsapp-link")
+def whatsapp_link_cmd(folder: Path = typer.Option(None, "--dir", help="Where whatsapp-mcp-ts lives (default "
+                                                                      "~/.whatsapp-mcp-ts)")) -> None:
+    """Install whatsapp-mcp-ts and link it to your WhatsApp (scan the QR code once)."""
+    import segno
+
+    from steward import whatsapp_link as wl
+
+    c = cfg()
+    folder = folder or wl.folder_of(c) or wl.DEFAULT_DIR
+    if not wl.installed(folder):
+        console.print(f"Installing whatsapp-mcp-ts ({wl.REPO}) in {folder}...")
+        wl.install(folder)
+    wl.patch(folder)  # its QR code stays on this computer
+    c = wl.configure(c, folder)
+    console.print(f"WhatsApp set to whatsapp-mcp-ts in {folder}.")
+    if wl.linked(folder):
+        console.print("[green]Already linked to your WhatsApp.[/green] (To link another account, delete "
+                      f"{folder / 'auth_info'} and run this again.)")
+        return
+
+    def show_qr(code: str) -> None:
+        console.print("\nIn WhatsApp on your phone: Settings > Linked devices > Link a device, then scan:\n")
+        segno.make(code, error="l").terminal(compact=True)
+        console.print("[dim](A new code appears every 20 seconds or so until one is scanned.)[/dim]")
+
+    if wl.link(folder, show_qr, lambda msg: console.print(f"[green]{escape(msg)}[/green]")):
+        console.print("[green]WhatsApp linked.[/green] Job Sourcer reads it on its next check (only chats about a "
+                      "job are kept; every other chat is ignored).")
+    else:
+        console.print("[yellow]Not linked: no QR code was scanned in time. Run this again.[/yellow]")
+        raise typer.Exit(1)
+
+
+@app.command("sandbox-whatsapp")
+def sandbox_whatsapp(name: str = typer.Option(...), text: str = typer.Option(...),
+                     chat: str = typer.Option("", help="Existing chat id (e.g. 5215512345678@s.whatsapp.net)")) -> None:
+    """Drop a new WhatsApp message into the sandbox."""
+    from steward.workspace import inject_whatsapp
+
+    cid = inject_whatsapp(cfg(), name, text, chat)
+    console.print(f"Injected sandbox WhatsApp message in {cid}.")
 
 
 if __name__ == "__main__":

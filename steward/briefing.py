@@ -121,7 +121,8 @@ def build(cfg: Config, db: Database, meetings: list[dict[str, Any]] | None = Non
     for f in fyi:
         f["summary"] = (loads(f.pop("classification_json"), {}) or {}).get("summary") or f["subject"]
         f["received"] = fmt_local(f.pop("received_at"), cfg.profile.timezone)
-    ignored = db.scalar("SELECT COUNT(*) FROM events WHERE status = 'ignored'") or 0
+    # Personal WhatsApp chats are ignored completely: not even counted.
+    ignored = db.scalar("SELECT COUNT(*) FROM events WHERE status = 'ignored' AND source != 'whatsapp'") or 0
     opps = db.query("SELECT * FROM opportunities ORDER BY updated_at DESC")
     by_stage = {s: 0 for s in STAGES}
     for o in opps:

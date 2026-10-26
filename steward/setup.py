@@ -30,7 +30,8 @@ SECRETS = {
 # Settings the dashboard may change. Anything else stays a deliberate edit of steward.yaml.
 EDITABLE_PREFIXES = ("profile.", "mail.", "calendar.", "scheduling.", "linkedin.backend", "linkedin.upstream",
                      "linkedin.hourly_cap",
-                     "linkedin.daily_cap", "linkedin.business_hours", "notion.", "notifications.",
+                     "linkedin.daily_cap", "linkedin.business_hours", "whatsapp.backend", "whatsapp.upstream",
+                     "whatsapp.hourly_cap", "whatsapp.daily_cap", "whatsapp.business_hours", "notion.", "notifications.",
                      "autonomy.execute_on_approve", "autonomy.follow_up_after_days", "llm.provider", "llm.model",
                      "llm.claude_code_model")
 STARTUP_NAME = "Job Sourcer.cmd"
@@ -232,6 +233,30 @@ def checks(cfg: Config) -> list[dict[str, Any]]:
         out.append(_step("linkedin", "LinkedIn", "off" if li.backend == "disabled" else "warn", f"backend: {li.backend}",
                          "Optional. See SETUP.md step 6 to connect LinkedIn through your own browser session."))
 
+    wa = cfg.whatsapp
+    if wa.backend == "upstream":
+        from steward import whatsapp_link
+
+        folder = whatsapp_link.folder_of(cfg)
+        if folder is None:
+            out.append(_step("whatsapp", "WhatsApp", "warn" if wa.upstream else "todo",
+                             f"via {wa.upstream.command} {' '.join(wa.upstream.args)}" if wa.upstream
+                             else "upstream not configured",
+                             "Run `steward whatsapp-link` in a terminal to install and link whatsapp-mcp-ts."))
+        else:
+            problems = [p for p, bad in (("whatsapp-mcp-ts is not installed", not whatsapp_link.installed(folder)),
+                                         ("not linked to your WhatsApp yet", not whatsapp_link.linked(folder)),
+                                         ("its QR code would open on quickchart.io", whatsapp_link.patched(folder) is False))
+                        if bad]
+            out.append(_step("whatsapp", "WhatsApp", "todo" if problems else "ok",
+                             f"whatsapp-mcp-ts in {folder}" + (" · " + "; ".join(problems) if problems else " · linked"),
+                             "Run `steward whatsapp-link` in a terminal and scan the QR code with WhatsApp "
+                             "(Settings > Linked devices > Link a device)."))
+    else:
+        out.append(_step("whatsapp", "WhatsApp", "off" if wa.backend == "disabled" else "warn", f"backend: {wa.backend}",
+                         "Optional. Run `steward whatsapp-link` in a terminal to read and answer recruiters on "
+                         "WhatsApp."))
+
     n = cfg.notion
     if n.enabled:
         has = bool(os.environ.get(n.token_env))
@@ -273,6 +298,7 @@ def editable_values(cfg: Config) -> dict[str, Any]:
         "scheduling.work_start": cfg.scheduling.work_start, "scheduling.work_end": cfg.scheduling.work_end,
         "scheduling.buffer_minutes": cfg.scheduling.buffer_minutes,
         "linkedin.backend": cfg.linkedin.backend,
+        "whatsapp.backend": cfg.whatsapp.backend, "whatsapp.business_hours": cfg.whatsapp.business_hours,
         "notion.enabled": cfg.notion.enabled, "notion.database_id": cfg.notion.database_id,
         "notifications.channels": cfg.notifications.channels, "notifications.ntfy_url": cfg.notifications.ntfy_url,
         "notifications.telegram_chat_id": cfg.notifications.telegram_chat_id,

@@ -4,6 +4,8 @@ import functools
 import inspect
 import json
 import os
+import random
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
@@ -12,6 +14,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
 from steward.config import Config, load_config
+from steward.timeutil import parse_iso, to_iso, tz, utcnow
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -81,3 +84,49 @@ class JsonStore:
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
         tmp.replace(self.path)
+
+
+class Pacer:
+    """Human pacing for a messaging channel (LinkedIn, WhatsApp): hourly and daily caps, business hours, and a
+    jittered gap between sends. `limits` has hourly_cap, daily_cap, business_hours ("09:00-19:00"),
+    min_delay_seconds and max_delay_seconds."""
+
+    def __init__(self, path: Path, limits: Any, timezone: str):
+        self.store = JsonStore(path, {"sends": [], "next_allowed_at": ""})
+        self.limits = limits
+        self.timezone = timezone
+
+    def check(self) -> dict[str, Any]:
+        lim = self.limits
+        state = self.store.load()
+        now = utcnow()
+        sends = [parse_iso(s) for s in state.get("sends", []) if parse_iso(s)]
+        sends = [s for s in sends if s > now - timedelta(days=1)]
+        last_hour = [s for s in sends if s > now - timedelta(hours=1)]
+        local = now.astimezone(tz(self.timezone))
+        start_s, end_s = lim.business_hours.split("-")
+        open_t = local.replace(hour=int(start_s[:2]), minute=int(start_s[3:5]), second=0, microsecond=0)
+        close_t = local.replace(hour=int(end_s[:2]), minute=int(end_s[3:5]), second=0, microsecond=0)
+        reason, retry = "", 0
+        next_allowed = parse_iso(state.get("next_allowed_at"))
+        if len(sends) >= lim.daily_cap:
+            reason, retry = "daily cap reached", int((min(sends) + timedelta(days=1) - now).total_seconds()) + 60
+        elif len(last_hour) >= lim.hourly_cap:
+            reason, retry = "hourly cap reached", int((min(last_hour) + timedelta(hours=1) - now).total_seconds()) + 60
+        elif not (open_t <= local < close_t):
+            target = open_t if local < open_t else open_t + timedelta(days=1)
+            reason, retry = "outside business hours", int((target - local).total_seconds()) + 60
+        elif next_allowed and now < next_allowed:
+            reason, retry = "pacing gap between sends", int((next_allowed - now).total_seconds()) + 1
+        return {"allowed": not reason, "reason": reason, "retry_after_seconds": max(retry, 0),
+                "sent_last_hour": len(last_hour), "sent_last_day": len(sends),
+                "hourly_cap": lim.hourly_cap, "daily_cap": lim.daily_cap}
+
+    def record(self) -> None:
+        lim = self.limits
+        state = self.store.load()
+        now = utcnow()
+        sends = [s for s in state.get("sends", []) if (parse_iso(s) or now) > now - timedelta(days=1)]
+        sends.append(to_iso(now))
+        gap = random.randint(lim.min_delay_seconds, max(lim.min_delay_seconds, lim.max_delay_seconds))
+        self.store.save({"sends": sends, "next_allowed_at": to_iso(now + timedelta(seconds=gap))})
