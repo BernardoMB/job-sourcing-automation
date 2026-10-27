@@ -106,6 +106,12 @@ before any AI call. If you prefer, create a Gmail filter that labels recruiter m
   read and moved to **Jobs**. That is the email itself and earlier ones in its thread, the LinkedIn "new message"
   notifications for that conversation, and the invitation email for that meeting. Emails that arrived after you
   handled it, and emails whose task is still open, stay in your inbox. Setting: `mail.cleanup_handled`.
+- **Rejection emails close the opportunity and are deleted.** An email that only turns you down ("we have decided
+  not to move forward") sets the opportunity to **Closed (lost)** in the pipeline and in Notion, withdraws any reply
+  still waiting for that opportunity, and is moved to **Trash** (Gmail empties it after 30 days, so it can be
+  restored until then). No reply is drafted. A rejection that also asks something (a question, a task, another
+  role) is still closed in the pipeline but stays in your inbox with a draft for you. Each one is listed in the
+  Logs tab and the ledger. Setting: `mail.delete_rejections` (off: close the opportunity, keep the email).
 - **Mail from LinkedIn is never answered by email** (message and InMail notifications, job alerts, digests). When
   one says someone messaged you, Job Sourcer checks LinkedIn right away and drafts the reply there.
 - **Recruiters' meeting invitations go on your calendar right away, without asking**: an invitation file (`.ics`,

@@ -40,6 +40,7 @@ EXECUTOR_ONLY = {
     ("calendar", "rsvp_event"),
     ("calendar", "add_invite"),
     ("mail", "file_message"),
+    ("mail", "trash_message"),
     ("linkedin", "toolkit_queue_decide"),
     ("linkedin", "send_message"),
     ("whatsapp", "send_message"),

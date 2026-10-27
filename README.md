@@ -195,7 +195,10 @@ the project folder; otherwise pass `-c path/to/steward.yaml`.
 4. **Email** (`mail:`): IMAP/SMTP, works with any provider. For Gmail: turn on 2-Step Verification, create an App
    Password, put it in `.env` as `STEWARD_MAIL_PASSWORD`, set `mail.username`. Tip: create a Gmail filter that labels
    recruiter mail `Recruiters` and set `mail.folder: Recruiters`; otherwise Job Sourcer reads INBOX and a keyword
-   pre-filter keeps unrelated mail away from the LLM (`mail.prefilter`). Messages are never marked as read.
+   pre-filter keeps unrelated mail away from the LLM (`mail.prefilter`). Unread mail stays unread, except
+   application acknowledgments and handled items, which are marked as read and moved to `mail.applications_label`
+   (`mail.file_application_acks`, `mail.cleanup_handled`). An email that only turns you down closes its
+   opportunity (pipeline and Notion) and is moved to Trash, with no reply drafted (`mail.delete_rejections`).
 5. **Calendar** (`calendar:`): Google Calendar API (free). In Google Cloud Console create a project, enable the
    Calendar API, create an OAuth client of type *Desktop app*, save the JSON as `workspace/secrets/google_credentials.json`, then:
 

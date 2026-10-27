@@ -64,7 +64,8 @@ CATEGORY_RULES: list[tuple[str, re.Pattern[str]]] = [
     ("work_authorization", re.compile(r"\b(visa|sponsorship|authori[sz]ed to work|work permit|right to work)", re.I)),
     ("notice_period", re.compile(r"\b(notice period|start date|when could you start|available to start)", re.I)),
     ("references_background", re.compile(r"\b(references|background check|social security|passport)", re.I)),
-    ("rejection", re.compile(r"\b(unfortunately|move forward with other|position has been filled|not moving forward)", re.I)),
+    ("rejection", re.compile(r"\b(unfortunately|move forward with other|position has been filled|"
+                             r"not (to )?(be )?mov(e|ing) forward|regret to inform|not been selected)", re.I)),
     ("experience_question", re.compile(r"\b(how many years|years of experience|led a team|managed a team)", re.I)),
     ("logistics", re.compile(r"\b(interview process|how to prepare|interview format|next round)", re.I)),
     ("availability_request", re.compile(
@@ -127,6 +128,8 @@ class OfflineLLM:
         for cat, pat in CATEGORY_RULES:
             if pat.search(text) and cat not in categories:
                 categories.append(cat)
+        if "rejection" in categories:
+            categories = [c for c in categories if c != "role_pitch"]  # it names the role it turns down
         times = self._parse_times(text, ctx)
         if times:
             categories = [c for c in categories if c != "availability_request"]

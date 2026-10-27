@@ -903,6 +903,8 @@ class Steward:
             except MCPToolError as exc:
                 log.warning("notion pull failed: %s", exc)
         self.db.update("events", event["id"], {"opportunity_id": opp["id"] if opp else None})
+        if self._plain_rejection(event, cls):
+            return await self._close_rejected(ctx.hub, event, cls, opp)
 
         # A newer message in the same thread makes any draft that has not gone out stale (undecided, waiting,
         # deferred, or failed): re-executing it later would answer an old message.
@@ -960,6 +962,52 @@ class Steward:
             await Executor(self.cfg, self.db, self.ledger, ctx.hub).execute_draft(draft_id)
             return "auto"
         return "queued"
+
+    @staticmethod
+    def _plain_rejection(event: dict[str, Any], cls: dict[str, Any]) -> bool:
+        """An email that only turns you down: no question, request, time, or other topic in it."""
+        cats = set(cls.get("categories") or [])
+        return (event["source"] == "email" and "rejection" in cats | {cls.get("stage_signal")}
+                and cats <= {"rejection", "status_update", "other"} and not cls.get("questions")
+                and not cls.get("candidate_tasks") and not cls.get("proposed_times") and not cls.get("suspicious"))
+
+    async def _close_rejected(self, hub: MCPHub, event: dict[str, Any], cls: dict[str, Any],
+                              opp: dict[str, Any] | None) -> str:
+        """Close the opportunity (Notion follows in this check's sync) and move the email to Trash. No reply."""
+        who = (opp or {}).get("company") or cls.get("company") or event.get("sender_name") or event.get("sender_address")
+        if opp:
+            # The email is the newest news: it wins over a stage just pulled from Notion.
+            pipeline.set_stage(self.db, opp["id"], "closed_lost", force=True)
+            self.db.update("opportunities", opp["id"], {"next_action": "Turned down: not moving forward"})
+        done = [f"Rejection from {who}: pipeline set to Closed (lost)"
+                + (" (Notion is updated in this check)" if opp and hub.enabled("notion") else "")]
+        raw, trashed = event["raw"], None
+        if self.cfg.mail.delete_rejections and raw.get("uid") is not None:
+            try:
+                trashed = await hub.call("mail", "trash_message", {"uid": int(raw["uid"]), "folder": raw.get("folder", "")},
+                                         capability=ExecutorCapability())
+                done.append(f"the email was moved to {trashed.get('folder') or 'Trash'}")
+            except (MCPToolError, ValueError) as exc:
+                done.append(f"the email could not be moved to Trash: {exc}")
+        elif not self.cfg.mail.delete_rejections:
+            done.append("the email was kept (mail.delete_rejections is off)")
+        note = "; ".join(done) + ". No reply drafted."
+        # Anything still waiting to answer them (this thread, or this opportunity on any channel) is moot now.
+        for d in self.db.query(
+                "SELECT * FROM drafts WHERE status IN ('pending', 'approved', 'edited', 'rejected', 'queued', 'deferred', "
+                "'failed') AND (opportunity_id = ? OR event_id IN (SELECT id FROM events WHERE thread_key = ? AND "
+                "source = 'email' AND id != ?))", ((opp or {}).get("id") or -1, event.get("thread_key") or "-",
+                                                   event["id"])):
+            reconcile.close(self, d, f"{who} turned you down in a newer email, so this is no longer needed. "
+                                     "Nothing was sent.")
+        self.db.update("events", event["id"], {"status": "info", "processed_at": now_iso(), "error": note,
+                                               **({"filed_at": now_iso()} if trashed else {})})
+        self.ledger.append("rejection", {"company": who, "subject": event.get("subject", ""),
+                                         "sender": event.get("sender_address", ""), "summary": cls.get("summary", ""),
+                                         "opportunity_id": (opp or {}).get("id"), "stage": "closed_lost",
+                                         "email": "trashed" if trashed else "kept"}, event_id=event["id"])
+        activity.record(self.db, "message", note, event_id=event["id"])
+        return "info"
 
     def record_assessment(self, event: dict[str, Any], test: dict[str, Any], opp: dict[str, Any] | None) -> int:
         """An online assessment becomes an open task (link + deadline), so it shows under Upcoming deadlines.

@@ -102,6 +102,15 @@ class SandboxMail:
                 return {"status": "filed", "label": label}
         raise ValueError(f"No message with UID {uid}")
 
+    def trash(self, uid: int, folder: str) -> dict[str, Any]:
+        data = self.inbox.load()
+        for m in data["messages"]:
+            if int(m["uid"]) == uid:
+                m["in_inbox"], m["trashed"] = False, True
+                self.inbox.save(data)
+                return {"status": "trashed", "folder": "Trash"}
+        raise ValueError(f"No message with UID {uid}")
+
     def send(self, msg: EmailMessage) -> None:
         data = self.outbox.load()
         data["sent"].append(
@@ -241,6 +250,39 @@ class ImapMail:
                     return m.group(1)
         return "[Gmail]/Sent Mail" if "gmail" in mail_cfg.imap_host else "Sent"
 
+    def _trash_folder(self, conn: imaplib.IMAP4_SSL) -> str:
+        """The mailbox's Trash (its name depends on the language: [Gmail]/Trash, [Gmail]/Papelera, ...)."""
+        typ, rows = conn.list()
+        for row in rows or []:
+            line = row.decode("utf-8", errors="replace") if isinstance(row, bytes) else str(row)
+            if "\\Trash" in line:
+                m = re.search(r'"([^"]+)"\s*$', line) or re.search(r"(\S+)\s*$", line)
+                if m:
+                    return m.group(1)
+        return "[Gmail]/Trash" if "gmail" in mail_cfg.imap_host else "Trash"
+
+    def trash(self, uid: int, folder: str) -> dict[str, Any]:
+        """Move a message to Trash (recoverable there until the provider empties it; Gmail: 30 days)."""
+        conn = self._imap()
+        try:
+            trash = self._trash_folder(conn)
+            typ, _ = conn.select(self._quote(folder))
+            if typ != "OK":
+                raise RuntimeError(f"Could not open {folder}")
+            typ, data = conn.uid("MOVE", str(uid), self._quote(trash))
+            if typ != "OK":  # servers without MOVE: copy, then remove from the folder
+                typ, data = conn.uid("COPY", str(uid), self._quote(trash))
+                if typ != "OK":
+                    raise RuntimeError(f"Could not move the message to {trash}: {data}")
+                conn.uid("STORE", str(uid), "+FLAGS", r"(\Deleted)")
+                conn.expunge()
+            return {"status": "trashed", "folder": trash}
+        finally:
+            try:
+                conn.logout()
+            except Exception:  # noqa: BLE001
+                pass
+
     def sent(self, since_uid: int, since_date: str) -> tuple[str, list[dict[str, Any]]]:
         """Headers of mail you sent (newest UIDs first fetched), to notice replies written outside Job Sourcer."""
         conn = self._imap()
@@ -354,6 +396,13 @@ def list_messages(folder: str = "", since_uid: int = 0, limit: int = 40) -> dict
 def file_message(uid: int, label: str = "", mark_read: bool = True, folder: str = "") -> dict[str, Any]:
     """Mark a message as read and move it to a label/folder (e.g. Jobs). Executor only."""
     return backend().file(uid, folder or mail_cfg.folder, label or mail_cfg.applications_label, mark_read)
+
+
+@mcp.tool(annotations=WRITE)
+@guarded
+def trash_message(uid: int, folder: str = "") -> dict[str, Any]:
+    """Move a message to Trash (recoverable there until the provider empties it). Executor only."""
+    return backend().trash(uid, folder or mail_cfg.folder)
 
 
 @mcp.tool(annotations=READ_ONLY_REMOTE)

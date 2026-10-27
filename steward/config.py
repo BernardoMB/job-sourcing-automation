@@ -95,6 +95,9 @@ class MailConfig(BaseModel):
     # Once an item is handled (reply sent, rejected, discarded, or answered by you), its emails are marked as
     # read and moved to applications_label, out of the inbox.
     cleanup_handled: bool = True
+    # An email that only turns you down ("we will not be moving forward") closes its opportunity (pipeline and
+    # Notion) and is moved to Trash (Gmail empties it after 30 days). No reply is drafted for it.
+    delete_rejections: bool = True
     initial_lookback_days: int = 7
     max_per_poll: int = 40
     prefilter: Literal["keywords", "all"] = "keywords"
