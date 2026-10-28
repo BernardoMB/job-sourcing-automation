@@ -138,6 +138,9 @@ class LinkedInConfig(BaseModel):
     business_hours: str = "09:00-19:00"
     min_delay_seconds: int = 60
     max_delay_seconds: int = 240
+    # Each check also re-reads this many hours before the newest message already seen: a thread can show up in the
+    # inbox after a newer message elsewhere (InMails often do). Messages are recorded once, so nothing is doubled.
+    recheck_hours: int = 48
     # The upstream LinkedIn MCP server that drives your own logged-in browser
     # session (for example the linkedin-toolkit Edge/Chrome extension + MCP server).
     upstream: ServerSpec | None = None

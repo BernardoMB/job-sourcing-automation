@@ -31,6 +31,19 @@ def is_linkedin_address(address: str) -> bool:
     return bool(LINKEDIN_DOMAIN.search((address or "").strip()))
 
 
+THREAD_LINK = re.compile(r"linkedin\.com/messaging/thread/([A-Za-z0-9_%=+\-]+)", re.IGNORECASE)
+
+
+def linkedin_thread_ids(text: str) -> list[str]:
+    """The conversation ids a LinkedIn notification links to (linkedin.com/messaging/thread/<id>/)."""
+    out: list[str] = []
+    for found in THREAD_LINK.findall(text or ""):
+        tid = found.replace("%3D", "=").replace("%3d", "=")
+        if tid not in out:
+            out.append(tid)
+    return out
+
+
 def is_linkedin_message_notice(from_email: str, subject: str, body: str) -> bool:
     """An email telling you someone messaged you on LinkedIn (as opposed to a job alert or digest)."""
     if not is_linkedin_address(from_email):

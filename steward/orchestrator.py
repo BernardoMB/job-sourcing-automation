@@ -496,6 +496,11 @@ class Steward:
                 notice = channels.is_linkedin_message_notice(sender, subject, body)
                 if notice and self.cfg.linkedin.backend != "disabled":
                     self.db.kv_set("linkedin:check_now", True)
+                    # The notification names the exact conversation: read it even if the inbox list misses it.
+                    notified = self.db.kv_get("linkedin:notified", {}) or {}
+                    for tid in channels.linkedin_thread_ids(f"{subject}\n{body}"):
+                        notified.setdefault(tid, {"name": msg.get("from_name", ""), "at": now_iso()})
+                    self.db.kv_set("linkedin:notified", notified)
                     why = "LinkedIn message notification: ignored here; the message is read and answered on LinkedIn."
                 elif notice:
                     why = ("LinkedIn message notification: ignored here. Connect LinkedIn (Setup step 6) so Job "
@@ -542,11 +547,17 @@ class Steward:
             return 0
 
     async def ingest_linkedin(self, hub: MCPHub) -> int:
-        since = self.db.kv_get("linkedin:since", "")
-        res = await hub.call("linkedin", "list_conversations", {"since": since, "limit": 30})
+        cursor = self.db.kv_get("linkedin:since", "")
+        # Re-read a window before the newest message seen: a thread can appear in the inbox list after a newer
+        # message in another thread moved the cursor on. Events are de-duplicated, so nothing is read twice.
+        start = parse_iso(cursor)
+        since = to_iso(start - timedelta(hours=self.cfg.linkedin.recheck_hours)) if start else ""
+        res = await hub.call("linkedin", "list_conversations", {"since": since, "limit": 50})
+        convs = list(res.get("conversations", []))
+        convs += await self._notified_linkedin_threads(hub, {c["id"].rstrip("=") for c in convs})
         count = 0
-        newest = since
-        for conv in res.get("conversations", []):
+        newest = cursor
+        for conv in convs:
             msgs = conv.get("messages", [])
             last_out = max((i for i, m in enumerate(msgs) if m["from"] == "me"), default=-1)
             new_in = [m for m in msgs[last_out + 1:] if m["from"] == "them"]
@@ -573,6 +584,30 @@ class Steward:
         if newest:
             self.db.kv_set("linkedin:since", newest)
         return count
+
+    async def _notified_linkedin_threads(self, hub: MCPHub, listed: set[str]) -> list[dict[str, Any]]:
+        """Conversations a LinkedIn notification email pointed to, read directly (however old their messages are).
+
+        One that cannot be read now is tried again on the next check, for up to 7 days."""
+        notified: dict[str, Any] = self.db.kv_get("linkedin:notified", {}) or {}
+        out = []
+        for tid, info in list(notified.items()):
+            if tid.rstrip("=") in listed:
+                notified.pop(tid)
+                continue
+            try:
+                conv = await hub.call("linkedin", "get_conversation", {"conversation_id": tid, "limit": 20})
+            except MCPToolError as exc:
+                if (parse_iso(info.get("at")) or utcnow()) < utcnow() - timedelta(days=7):
+                    notified.pop(tid)
+                log.warning("notified LinkedIn thread %s not read yet: %s", tid, exc)
+                continue
+            conv["id"] = conv.get("id") or tid
+            conv["participant_name"] = conv.get("participant_name") or info.get("name", "")
+            out.append(conv)
+            notified.pop(tid)
+        self.db.kv_set("linkedin:notified", notified)
+        return out
 
     async def ingest_whatsapp(self, hub: MCPHub) -> int:
         """New messages in one-to-one WhatsApp chats. A chat that is not about a job is ignored completely:

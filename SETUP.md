@@ -194,7 +194,9 @@ and talks to it at `http://127.0.0.1:47830/mcp` with your pairing token. Its err
 Keep Edge open and signed in to LinkedIn: the extension only works while the browser runs. (Edge can keep
 extensions running after you close its windows: **Settings → System and performance → Continue running background
 extensions and apps when Microsoft Edge is closed**.) On its first check Job Sourcer only looks at threads active in the
-past 7 days. It then checks every 10 minutes and sends at most 8 messages an hour and 30 a day, only during
+past 7 days. After that, each check also re-reads the last 48 hours (`linkedin.recheck_hours`), because a thread can
+show up in the inbox after newer messages elsewhere (InMails often do), and a LinkedIn "sent you a message" email
+makes Job Sourcer open that exact conversation, however old. A message is never recorded twice. It then checks every 10 minutes and sends at most 8 messages an hour and 30 a day, only during
 business hours. Any LinkedIn automation carries some account risk.
 
 ## 7. WhatsApp (Setup → step 7)
