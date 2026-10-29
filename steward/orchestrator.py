@@ -301,7 +301,12 @@ class Steward:
             reply_needed = bool(decisions.message_text(old_actions)) or bool(cls.get("needs_reply"))
             if instruction:
                 plan = await instructor.plan(ctx, event, cls, old_actions, instruction)
-                sched = await self._schedule_from_plan(ctx, event, cls, plan, sched, warnings)
+                try:
+                    sched = await self._schedule_from_plan(ctx, event, cls, plan, sched, warnings)
+                except MCPToolError as exc:
+                    sched = scheduler.unreadable(exc)
+                    warnings.append("Your calendar could not be read, so no times were checked or booked: reconnect "
+                                    "Google Calendar, then try again.")
                 reply_needed = plan["reply_needed"]
                 for t in plan["tasks"]:
                     tasks_mod.add(self.cfg, self.db, self.ledger, t["title"], details=t["details"], kind=t["kind"],
@@ -356,6 +361,26 @@ class Steward:
                                event_id=old["event_id"], draft_id=new_id)
         self.rescore()
         return {"draft_id": new_id, "summary": (plan or {}).get("summary") or reasons[0], "warnings": warnings}
+
+    async def retry(self, draft_id: int) -> dict[str, Any]:
+        """Work a waiting item out again from the message (after you reconnected what failed, say)."""
+        old = self.db.get_draft(draft_id)
+        if old is None or old["status"] not in ("pending", "approved", "edited", "rejected"):
+            raise decisions.DecisionError("Only items still waiting for you can be tried again")
+        self.db.update("drafts", draft_id, {"status": "superseded", "status_reason": "Tried again."})
+        self.db.update("events", old["event_id"], {"status": "new", "attempts": 0, "error": None})
+        errors: list[str] = []
+        async with MCPHub(self.cfg) as hub:
+            await self.process_pending(hub, errors)
+        self.rescore()
+        new = self.db.query("SELECT id FROM drafts WHERE event_id = ? AND id > ? AND status = 'pending' "
+                            "ORDER BY id DESC LIMIT 1", (old["event_id"], draft_id))
+        event = self.db.get_event(old["event_id"]) or {}
+        if new:
+            return {"draft_id": new[0]["id"], "status": "drafted"}
+        if event.get("status") == "new":  # Claude is paused, or it failed once: the next check tries again
+            return {"draft_id": None, "status": "queued", "error": event.get("error") or ""}
+        return {"draft_id": None, "status": event.get("status") or "processed"}
 
     async def _schedule_from_plan(self, ctx: AgentContext, event: dict[str, Any], cls: dict[str, Any],
                                   plan: dict[str, Any], sched: dict[str, Any], warnings: list[str]) -> dict[str, Any]:

@@ -10,9 +10,17 @@ from datetime import timedelta
 from typing import Any
 
 from steward.agents.base import AgentContext
+from steward.mcp_hub import MCPToolError
 from steward.timeutil import fmt_range, parse_iso, to_iso, utcnow
 
 SCHEDULING_CATEGORIES = {"availability_request", "interview_request"}
+
+
+def unreadable(exc: Exception) -> dict[str, Any]:
+    """The schedule when the calendar cannot be read (its sign-in expired, say): the reply is written without times."""
+    return {"kind": "unknown", "checks": [], "slots": [], "booking": None, "rsvp": None, "calendar_error": str(exc)[:300],
+            "notes": ["Your calendar could not be read, so no times were checked or offered. Reconnect Google "
+                      "Calendar, then try again."]}
 
 
 def label(ctx: AgentContext, start: str, end: str) -> str:
@@ -36,6 +44,13 @@ async def slots_between(ctx: AgentContext, start, end, duration: int) -> list[di
 
 
 async def plan(ctx: AgentContext, event: dict[str, Any], cls: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return await _plan(ctx, event, cls)
+    except MCPToolError as exc:
+        return unreadable(exc)
+
+
+async def _plan(ctx: AgentContext, event: dict[str, Any], cls: dict[str, Any]) -> dict[str, Any]:
     sch = ctx.cfg.scheduling
     now = utcnow()
     cats = set(cls.get("categories", []))

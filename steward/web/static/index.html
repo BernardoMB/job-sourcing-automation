@@ -165,6 +165,18 @@ tr.detail td { background: var(--bg); }
 .steer, .teach { margin-top: 10px; }
 .steer label, .teach label { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 4px; }
 .steer textarea, .teach textarea { width: 100%; min-height: 54px; resize: vertical; }
+.revbar { margin-top: 8px; }
+.revbar .track { height: 6px; border-radius: 3px; background: var(--accent-soft); overflow: hidden; }
+.revbar .fill { height: 100%; width: 0; background: var(--accent); border-radius: 3px; transition: width .4s ease; }
+.revbar .what { display: flex; justify-content: space-between; gap: 8px; margin-top: 4px; font-size: 12.5px; color: var(--muted); }
+.revbar .steps { list-style: none; margin: 6px 0 0; padding: 0; font-size: 13px; color: var(--muted); }
+.revbar .steps li { display: flex; gap: 6px; align-items: baseline; padding: 1px 0; }
+.revbar .steps li::before { content: "○"; width: 1em; flex: none; text-align: center; }
+.revbar .steps li.now { color: var(--ink); font-weight: 600; }
+.revbar .steps li.now::before { content: "●"; color: var(--accent); animation: pulse .8s ease-in-out infinite alternate; }
+.revbar .steps li.past::before { content: "✓"; color: var(--ok); }
+.revbar.done .fill { background: var(--ok); }
+.revbar.failed .fill { background: var(--high); }
 .tasklist { border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; margin: 8px 0; }
 .taskrow { display: flex; gap: 8px; align-items: flex-start; flex-wrap: wrap; padding: 6px 0; border-bottom: 1px solid var(--line); }
 .taskrow:last-child { border-bottom: 0; }
@@ -517,15 +529,62 @@ function dontAskForm(v) {
     <div class="meta">Facts still come only from your CV and calendar; salary, offers and other sensitive topics always come back to you.</div>
   </div>`;
 }
+// Revising takes a while (Claude plans, rewrites and checks the reply): show how far along it is. Kept per item, so a
+// briefing refresh in the meantime redraws the bar where it was.
+const revising = new Map();
+const REVISE_STEPS = [[0, "Reading your instruction"], [3, "Planning what to change"], [8, "Rewriting the reply"],
+  [18, "Checking it before it goes to your briefing"]];
+function reviseState(id) {
+  const r = revising.get(id);
+  if (!r) return null;
+  const t = (Date.now() - r.at) / 1000;
+  const pct = r.done || r.failed ? 100 : 92 * (1 - Math.exp(-t / 14));
+  const at = r.done ? REVISE_STEPS.length : REVISE_STEPS.filter(s => t >= s[0]).length - 1;
+  const step = r.failed ? `Could not revise it: ${r.failed}` : r.done ? "Revised: the updated decision is in your briefing."
+    : REVISE_STEPS[at][1] + "…";
+  return { pct, step, at, secs: `${Math.round(t)}s`, cls: r.failed ? "failed" : r.done ? "done" : "" };
+}
+function reviseSteps(s) {
+  return REVISE_STEPS.map(([, name], i) => `<li class="${i < s.at ? "past" : i === s.at ? "now" : ""}">${esc(name)}</li>`).join("");
+}
+function reviseBar(id) {
+  const s = reviseState(id);
+  if (!s) return "";
+  return `<div class="revbar ${s.cls}" role="progressbar" aria-label="Revising with your instruction" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(s.pct)}" aria-valuetext="${esc(s.step)}">
+    <div class="track"><div class="fill" style="width:${s.pct}%"></div></div>
+    <div class="what"><span>${esc(s.step)}</span><span>${s.secs}</span></div>
+    <ul class="steps" aria-hidden="true">${reviseSteps(s)}</ul></div>`;
+}
+setInterval(() => {
+  for (const id of revising.keys()) {
+    const el = document.querySelector(`.card[data-id="${id}"] .revbar`), s = reviseState(id);
+    if (!el || !s) continue;
+    el.className = `revbar ${s.cls}`;
+    el.setAttribute("aria-valuenow", Math.round(s.pct));
+    el.setAttribute("aria-valuetext", s.step);
+    el.querySelector(".steps").innerHTML = reviseSteps(s);
+    el.querySelector(".fill").style.width = `${s.pct}%`;
+    const [step, secs] = el.querySelectorAll(".what span");
+    step.textContent = s.step; secs.textContent = s.secs;
+  }
+}, 250);
 function draftCard(v) {
   const decided = v.status !== "pending";
   const opp = v.opportunity ? `${esc(v.opportunity.company || "")}${v.opportunity.role ? " — " + esc(v.opportunity.role) : ""} · ${esc(v.opportunity.stage)}` : "";
   const lock = (v.reasons || []).some(r => r.startsWith("Offer room")) ? `<div class="lock">🔒 Offer stage: autonomy is revoked for this thread. You handle it personally.</div>` : "";
   const ja = v.job_advancement ?? 0;
-  const actions = v.actions.length ? v.actions.map((a, i) => actionEditor(v, a, i)).join("") : `<div class="empty">No written reply possible here: handle it yourself (for example, call them back), then reject to clear it.</div>`;
+  const failed = (v.reasons || []).some(r => r.startsWith("Job Sourcer could not process this message"));
+  const calendarDown = !!(v.schedule || {}).calendar_error
+    || (v.reasons || []).some(r => /calendar\./.test(r) && /invalid_grant|expired or revoked|RefreshError/.test(r));
+  const empty = failed ? `Job Sourcer couldn't write this reply yet. ${calendarDown ? "Your Google Calendar sign-in expired: reconnect it and" : "Press Try again and"} it writes the reply for you to approve.`
+    : (v.categories || []).includes("call_notification") ? "They called you and there is no email, LinkedIn, or WhatsApp thread with them yet: call them back, then press Done."
+    : "Nothing to send: press Done to close this item, or tell Job Sourcer below what to write.";
+  const actions = v.actions.length ? v.actions.map((a, i) => actionEditor(v, a, i)).join("") : `<div class="empty">${esc(empty)}</div>`;
+  const fix = `${calendarDown ? `<button class="btn primary small" data-do="reconnect">Reconnect Google Calendar</button>` : ""}${failed || calendarDown ? `<button class="btn small" data-do="retry">Try again</button>` : ""}`;
   const buttons = decided
     ? `<span class="state ${v.status}">${v.status === "rejected" ? "Rejected" : v.status === "edited" ? "Edited & approved" : "Approved"}</span><span class="meta">${B.settings.execute_on_approve ? "" : "runs when you press Go"}</span><button class="btn small" data-do="reset">Undo</button>`
-    : `<button class="btn primary small" data-do="approve">${v.actions.length ? "Approve" : "Done"}</button>
+    : failed ? `${fix}<button class="btn small danger" data-do="reject">Reject</button>`
+    : `${fix}<button class="btn ${calendarDown ? "" : "primary "}small" data-do="approve">${v.actions.length ? "Approve" : "Done"}</button>
        <button class="btn small danger" data-do="reject">Reject</button>
        ${v.actions.length ? `<button class="btn small" data-do="dontask">Don't ask again…</button>` : ""}`;
   return `<article class="card ${v.priority === "high" ? "high" : ""} ${decided ? "decided" : ""} ${freshIds.has(v.id) ? "fresh" : ""}" data-id="${v.id}">
@@ -552,7 +611,8 @@ function draftCard(v) {
     <div class="steer">
       <label>Or tell Job Sourcer what to do instead — it rewrites the reply and actions, and shows them here for your approval</label>
       <textarea data-instr placeholder="e.g. Decline politely, I only want remote roles. · Propose Tuesday morning instead. · Ask for the salary range before scheduling. · Remind me to send my portfolio by Friday."></textarea>
-      <div class="buttons"><button class="btn small" data-do="instruct">Revise with my instruction</button></div>
+      <div class="buttons"><button class="btn small" data-do="instruct" ${revising.has(v.id) ? "disabled" : ""}>${revising.has(v.id) ? "Revising…" : "Revise with my instruction"}</button></div>
+      <div class="revslot">${reviseBar(v.id)}</div>
     </div>
     <div class="teach">
       <label>Teach Job Sourcer a rule for future replies (how it should respond next time)</label>
@@ -736,14 +796,45 @@ document.addEventListener("click", async (ev) => {
     card.querySelector(".dontask-slot").innerHTML = "";
     return act(() => api(`/api/drafts/${id}/dont-ask`, "POST", body), (r) => `Rule “${r.name}” is active. This draft is approved.`);
   }
+  if (what === "reconnect" || what === "retry") {
+    btn.disabled = true;
+    if (what === "reconnect") {
+      btn.textContent = "Finish the Google sign-in in your browser…";
+      toast("A Google sign-in page opens in your browser. Finish it there.", 8000);
+      const ok = await act(() => api("/api/setup/google-auth", "POST", {}), "Google Calendar connected.");
+      if (!ok) { btn.disabled = false; btn.textContent = "Reconnect Google Calendar"; return; }
+    }
+    btn.textContent = "Writing the reply… (this takes a few seconds)";
+    const r = await act(() => api(`/api/drafts/${id}/retry`, "POST", {}),
+      (res) => res.draft_id ? "Reply written. Review it and approve." : res.status === "queued" ? "Queued: Job Sourcer writes it on its next check." : "Done: nothing needed a reply.");
+    if (r && r.draft_id) freshIds.add(r.draft_id);
+    await refresh(true);
+    return;
+  }
   if (what === "instruct") {
     const text = card.querySelector("[data-instr]").value.trim();
     if (!text) return toast("Write what Job Sourcer should do instead.");
-    btn.disabled = true; btn.textContent = "Revising… (this takes a few seconds)";
-    const r = await act(() => api(`/api/drafts/${id}/instruct`, "POST", { instruction: text }),
-      (res) => `Revised: ${(res.summary || "new draft ready").replace(/\.$/, "")}${res.warnings && res.warnings.length ? " · " + res.warnings.join(" ").replace(/\.$/, "") : ""}. Review it and approve.`);
-    if (r && r.draft_id) { freshIds.add(r.draft_id); await refresh(true); }
-    else { btn.disabled = false; btn.textContent = "Revise with my instruction"; }
+    btn.disabled = true; btn.textContent = "Revising…";
+    revising.set(id, { at: Date.now() });
+    card.querySelector(".revslot").innerHTML = reviseBar(id);
+    let r;
+    try { r = await api(`/api/drafts/${id}/instruct`, "POST", { instruction: text }); }
+    catch (e) { revising.get(id).failed = e.message; }
+    if (r) revising.get(id).done = true;
+    await new Promise(ok => setTimeout(ok, r ? 900 : 4000));  // let the finished bar be seen
+    revising.delete(id);
+    if (!r) {
+      const slot = document.querySelector(`.card[data-id="${id}"] .revslot`);
+      if (slot) slot.innerHTML = "";
+      btn.disabled = false; btn.textContent = "Revise with my instruction";
+      return;
+    }
+    dirty = false;
+    toast(`Revised: ${(r.summary || "new draft ready").replace(/\.$/, "")}${r.warnings && r.warnings.length ? " · " + r.warnings.join(" ").replace(/\.$/, "") : ""}. Review it and approve.`);
+    if (r.draft_id) freshIds.add(r.draft_id);
+    await refresh(true);
+    const fresh = document.querySelector(`.card[data-id="${r.draft_id}"]`);
+    if (fresh) fresh.scrollIntoView({ behavior: "smooth", block: "nearest" });
     return;
   }
   if (what === "rule-save" || what === "rule-redraft") {

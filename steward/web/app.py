@@ -36,7 +36,7 @@ from steward.llm import LLMError
 from steward.config import Config
 from steward.db import loads
 from steward.llm.schemas import CRITIQUE_SCHEMA
-from steward.mcp_hub import MCPHub
+from steward.mcp_hub import MCPHub, MCPToolError
 from steward.notify import upcoming
 from steward.orchestrator import Steward
 from steward.pipeline import set_stage
@@ -333,7 +333,19 @@ def create_app(cfg: Config, watch: bool = True, tick: int | None = None) -> Fast
             raise bad(exc)
         except LLMError as exc:
             raise HTTPException(503, f"Claude could not process the instruction right now: {exc}")
+        except MCPToolError as exc:
+            raise HTTPException(503, f"A connected service failed while revising: {exc}")
         bump("revised", id=res["draft_id"])
+        return res
+
+    @app.post("/api/drafts/{draft_id}/retry")
+    async def retry(draft_id: int) -> dict[str, Any]:
+        try:
+            async with lock:
+                res = await steward.retry(draft_id)
+        except decisions.DecisionError as exc:
+            raise bad(exc)
+        bump("revised", id=res["draft_id"] or draft_id)
         return res
 
     @app.post("/api/drafts/{draft_id}/rule")
