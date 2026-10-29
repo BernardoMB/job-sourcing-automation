@@ -1,0 +1,15 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<feed xmlns='http://www.w3.org/2005/Atom' xmlns:apps='http://schemas.google.com/apps/2006'>
+  <title>Mail Filters</title>
+  <entry>
+    <category term='filter'></category>
+    <title>Mail Filter</title>
+    <content></content>
+    <!-- Calendar invitation emails from iammanuel0325@gmail.com: mark as read, label Robert, skip the Inbox. -->
+    <apps:property name='from' value='iammanuel0325@gmail.com'/>
+    <apps:property name='hasTheWord' value='{filename:ics subject:invitation subject:&quot;updated invitation&quot;}'/>
+    <apps:property name='label' value='Robert'/>
+    <apps:property name='shouldArchive' value='true'/>
+    <apps:property name='shouldMarkAsRead' value='true'/>
+  </entry>
+</feed>

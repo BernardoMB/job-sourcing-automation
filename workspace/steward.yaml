@@ -1,0 +1,202 @@
+# Job Sourcer configuration. See README.md and SETUP.md for every option.
+profile:
+  name: Bernardo Mondragón Brozon
+  email: bmondragonbrozon@gmail.com
+  timezone: America/Mexico_City
+  headline: Forward Deployed Engineer | Tech Lead | Data Science | Agentic Developer
+  linkedin_url: https://www.linkedin.com/in/bernardo-mondragon/
+  target_roles:
+  - Forward Deployed Engineer
+  - Lead Full‑Stack Engineer
+  - Data & Cloud Architect
+  - AI/ML Practitioner
+  - AI Solutions Architect
+  - Forward Deployed Engineer
+  - Lead Data Scientist
+  - Senior Machine Learning Engineer
+  - Applied AI Engineer
+  - MLOps Engineer
+  - Principal Data Engineer
+  - Analytics Engineering Manager
+  - Senior Full-Stack Engineer
+  - Principal Software Engineer
+  - Staff Software Engineer
+  - Technical Lead
+  - Engineering Manager
+  - Platform Engineer
+  - Cloud Application Architect
+  - Enterprise Solutions Architect
+  - Digital Transformation Consultant
+  - Insurance Technology Consultant
+  - Lead Solution Architect
+  - Chief Technology Officer (CTO)
+  preferred_locations:
+  - Any
+  remote_preference: Remote
+  work_authorization: Mexican citizen
+  notice_period: 'Immediately '
+  relocation: Open to discussing relocation for the right role
+  salary_policy: Never state a number first. Defer compensation until after the technical
+    stage; if pressed, ask for the budgeted range for the role. won't work for less
+    than 4K USD per month.
+  salary_expectation_private: Above 4K USD/month or above 40 USD/hr
+  facts: []
+  signature: Bernardo
+llm:
+  provider: claude-code
+  model: claude-opus-5-5
+  models: {}
+  effort:
+    classify: low
+    draft: medium
+    critique: low
+    distill: low
+  refusal_fallback: true
+  grok_model: grok-4
+  grok_api_key_env: XAI_API_KEY
+  max_tokens: 16000
+  claude_code_model: opus
+  claude_code_path: ''
+  claude_code_timeout: 300
+mail:
+  backend: imap
+  imap_host: imap.gmail.com
+  imap_port: 993
+  smtp_host: smtp.gmail.com
+  smtp_port: 465
+  smtp_starttls: false
+  username: bmondragonbrozon@gmail.com
+  password_env: STEWARD_MAIL_PASSWORD
+  from_name: Bernardo Mondragón Brozon
+  folder: INBOX
+  save_sent_folder: ''
+  sent_folder: ''
+  file_application_acks: true
+  applications_label: Jobs
+  cleanup_handled: true
+  initial_lookback_days: 7
+  max_per_poll: 40
+  prefilter: keywords
+  poll_minutes: 5
+  server: null
+calendar:
+  backend: google
+  calendar_id: primary
+  credentials_file: secrets/google_credentials.json
+  token_file: secrets/google_token.json
+  poll_minutes: 5
+  invite_lookahead_days: 21
+  server: null
+scheduling:
+  working_days:
+  - 0
+  - 1
+  - 2
+  - 3
+  - 4
+  work_start: 08:00
+  work_end: '21:00'
+  buffer_minutes: 15
+  default_duration_minutes: 30
+  min_notice_hours: 18
+  lookahead_days: 10
+  max_slots: 3
+  avoid: []
+  book_on_accept: true
+  add_video_link: true
+  meeting_title: '{company} - {role} ({recruiter})'
+linkedin:
+  backend: upstream
+  poll_minutes: 5
+  hourly_cap: 8
+  daily_cap: 30
+  business_hours: 09:00-19:00
+  min_delay_seconds: 60
+  max_delay_seconds: 240
+  upstream:
+    command: ''
+    args: []
+    env: {}
+    url: http://127.0.0.1:47830/mcp
+    token_env: LINKEDIN_TOOLKIT_TOKEN
+    tools: {}
+  server: null
+  manage_bridge: true
+  bridge_command:
+  - npx
+  - -y
+  - -p
+  - linkedin-toolkit-mcp
+  - lit
+  - serve
+  - --http
+whatsapp:
+  backend: upstream
+  poll_minutes: 5
+  hourly_cap: 8
+  daily_cap: 30
+  business_hours: 00:00-23:59
+  min_delay_seconds: 30
+  max_delay_seconds: 120
+  initial_lookback_days: 7
+  max_chats: 40
+  include_groups: false
+  upstream:
+    command: node
+    args:
+    - C:\Users\Bernardo\.whatsapp-mcp-ts\src\main.ts
+    env: {}
+    url: ''
+    token_env: ''
+    tools: {}
+  settle_seconds: 20
+  server: null
+notion:
+  enabled: true
+  token_env: NOTION_TOKEN
+  database_id: 40068ba4-e039-81b4-955f-c64d3284b5ad
+  server: null
+cv:
+  path: cv
+  aliases: {}
+  exclude_sections: []
+  server: null
+autonomy:
+  hard_escalate_categories:
+  - salary_question
+  - offer
+  - negotiation
+  - references_background
+  - relocation_question
+  - work_authorization
+  band_high: 0.9
+  band_low: 0.6
+  target_precision: 0.9
+  calibration_min_samples: 20
+  job_advancement_flag: 0.5
+  job_advancement_auto_send_min: 0.7
+  default_rule_min_confidence: 0.85
+  propose_rule_after: 3
+  propose_promotion_after: 10
+  shadow_matches_required: 3
+  decay_days: 60
+  preference_min_edits: 2
+  follow_up_after_days: 5
+  max_processing_attempts: 3
+  execute_on_approve: false
+notifications:
+  channels: []
+  ntfy_url: ''
+  telegram_bot_token_env: TELEGRAM_BOT_TOKEN
+  telegram_chat_id: ''
+  quiet_hours: 22:00-07:30
+  min_pending: 3
+  cooldown_minutes: 90
+  meeting_reminder_minutes: 15
+  sound: true
+  sound_file: ''
+dashboard:
+  host: 127.0.0.1
+  port: 8765
+  tick_seconds: 30
+data_dir: data
