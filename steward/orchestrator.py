@@ -18,7 +18,7 @@ from datetime import timedelta
 from typing import Any
 
 from steward import (acknowledgments, activity, assessments, channels, decisions, linkedin_bridge, mail_cleanup,
-                     notify, pipeline, priority, reconcile, sound)
+                     notify, notion_sync, pipeline, priority, reconcile, sound)
 from steward import tasks as tasks_mod
 from steward.agents import classifier, cv_analyst, drafter, fewshot, instructor, scheduler
 from steward.agents.base import AgentContext
@@ -115,7 +115,6 @@ class Steward:
                 ("linkedin", self.ingest_linkedin, self.cfg.linkedin.poll_minutes),
                 ("whatsapp", self.ingest_whatsapp, self.cfg.whatsapp.poll_minutes),
                 ("calendar", self.ingest_calendar, self.cfg.calendar.poll_minutes),
-                ("notion", self.sync_notion_calendar, self.cfg.notion.calendar_poll_minutes),
                 ("workcal", self.sync_work_calendar, self.cfg.work_calendar.poll_minutes),
             ):
                 # A LinkedIn message notification in the mail makes LinkedIn due right away.
@@ -172,7 +171,6 @@ class Steward:
                 summary["learning"] = await Learner(self.cfg, self.db, self.ledger, self.llm).run()
             except Exception as exc:  # noqa: BLE001 - learning never blocks the loop
                 summary["errors"].append(f"learning: {exc}")
-            await self.sync_notion(hub, summary["errors"])
             try:
                 summary["notified"] = await notify.maybe_notify(self.cfg, self.db, hub)
             except Exception as exc:  # noqa: BLE001
@@ -184,7 +182,7 @@ class Steward:
 
     def _log_check(self, trigger: str, checked: dict[str, str], summary: dict[str, Any], seconds: float) -> None:
         names = {"email": "email", "linkedin": "LinkedIn", "whatsapp": "WhatsApp", "calendar": "calendar",
-                 "notion": "Notion events", "workcal": "work calendar"}
+                 "workcal": "work calendar"}
         idle = all(state in ("not due", "off") for state in checked.values()) and not (
             summary["processed"] or summary["auto_executed"] or summary.get("deferred_retried") or summary["errors"]
             or summary.get("reconciled") or summary.get("cleaned"))
@@ -220,7 +218,7 @@ class Steward:
     async def go(self) -> dict[str, Any]:
         async with MCPHub(self.cfg) as hub:
             result = await Executor(self.cfg, self.db, self.ledger, hub).run_batch()
-            await self.sync_notion(hub, result.setdefault("errors", []))
+            result.setdefault("errors", [])
             # Superseded drafts (calendar changed) get re-drafted right away.
             processed, auto = await self.process_pending(hub, result["errors"])
             result["redrafted"] = processed
@@ -267,7 +265,6 @@ class Steward:
             self.db.execute("UPDATE executions SET status = 'failed', updated_at = ? WHERE draft_id = ? AND status = "
                             "'unknown'", (now_iso(), draft_id))
             result = await Executor(self.cfg, self.db, self.ledger, hub).execute_draft(draft_id, force=True)
-            await self.sync_notion(hub, [])
             await self.cleanup_mail(hub)
         return result
 
@@ -301,7 +298,6 @@ class Steward:
         async with MCPHub(self.cfg) as hub:
             result = await Executor(self.cfg, self.db, self.ledger, hub).execute_draft(draft_id)
             errors: list[str] = []
-            await self.sync_notion(hub, errors)
             await self.cleanup_mail(hub, errors)
             if result["status"] == "superseded":
                 await self.process_pending(hub, errors)
@@ -873,43 +869,6 @@ class Steward:
                             f"{removed} cancelled ones removed from your calendar.")
         return added + moved + removed
 
-    async def sync_notion_calendar(self, hub: MCPHub) -> int:
-        """Rows with a date and time in your Notion workspaces go on your calendar, and follow them when they move.
-
-        Every workspace whose integration token is set (notion.token_env plus notion.extra_token_envs) is read;
-        only databases shared with that integration are visible. Nothing is ever removed from the calendar.
-        Returns how many entries were added or moved."""
-        n = self.cfg.notion
-        if not (n.calendar_sync and hub.enabled("notion") and hub.enabled("calendar")):
-            raise IntegrationDisabled("Notion calendar sync is off")
-        tz_name, changed = self.cfg.profile.timezone, 0
-        synced: dict[str, str] = self.db.kv_get("notion:calendar_copies", {}) or {}  # Notion entry uid -> event id
-        for token_env in [n.token_env, *n.extra_token_envs]:
-            if not os.environ.get(token_env):
-                continue
-            res = await hub.call("notion", "scheduled_entries", {
-                "days": n.calendar_lookahead_days, "token_env": token_env, "exclude_database_id": n.database_id,
-                "default_minutes": n.calendar_default_minutes})
-            for e in res.get("entries", []):
-                where = " / ".join(x for x in (e["workspace"], e["database"]) if x)
-                out = await hub.call("calendar", "sync_copy", {
-                    "uid": e["uid"], "title": e["title"], "start": e["start"], "end": e["end"],
-                    "description": f"From Notion ({where}): {e['url']}", "event_id": synced.get(e["uid"], "")},
-                    capability=ExecutorCapability())
-                if out["status"] != "removed":
-                    synced[e["uid"]] = out["id"]
-                when = fmt_range(e["start"], e["end"], tz_name)
-                if out["status"] == "added":
-                    clash = f" It overlaps {', '.join(out['overlaps'])}." if out.get("overlaps") else ""
-                    activity.record(self.db, "calendar", f"From Notion ({where}): {e['title']}, {when} "
-                                    f"added to your calendar.{clash}", "warn" if clash else "info")
-                elif out["status"] == "updated":
-                    activity.record(self.db, "calendar", f"From Notion ({where}): {e['title']} moved on your "
-                                    f"calendar to {when}.")
-                changed += out["status"] in ("added", "updated")
-        self.db.kv_set("notion:calendar_copies", synced)
-        return changed
-
     async def ingest_calendar(self, hub: MCPHub) -> int:
         res = await hub.call("calendar", "pending_invites", {"days": self.cfg.calendar.invite_lookahead_days})
         count = 0
@@ -1210,11 +1169,6 @@ class Steward:
             self.record_assessment(event, test, opp)
         tasks_mod.suggest_from_classification(self.cfg, self.db, self.ledger, cls, event["id"],
                                               opp["id"] if opp else None)
-        if opp and ctx.hub.enabled("notion"):
-            try:
-                opp = await pipeline.notion_pull(ctx.hub, self.db, opp)
-            except MCPToolError as exc:
-                log.warning("notion pull failed: %s", exc)
         self.db.update("events", event["id"], {"opportunity_id": opp["id"] if opp else None})
         if self._plain_rejection(event, cls):
             return await self._close_rejected(ctx.hub, event, cls, opp)
@@ -1293,15 +1247,14 @@ class Steward:
 
     async def _close_rejected(self, hub: MCPHub, event: dict[str, Any], cls: dict[str, Any],
                               opp: dict[str, Any] | None) -> str:
-        """Close the opportunity (Notion follows in this check's sync) and move the email to Trash. No reply."""
+        """Close the opportunity and move the email to Trash. No reply."""
         who = (opp or {}).get("company") or cls.get("company") or event.get("sender_name") or event.get("sender_address")
         if opp:
-            # The email is the newest news: it wins over a stage just pulled from Notion.
+            # The email is the newest news: it wins over the stage on record.
             pipeline.set_stage(self.db, opp["id"], "closed_lost", force=True)
             self.db.update("opportunities", opp["id"], {"next_action": "Turned down: not moving forward"})
             pipeline.note(self.db, opp["id"], "Rejected: they are not moving forward")
-        done = [f"Rejection from {who}: pipeline set to Closed (lost)"
-                + (" (Notion is updated in this check)" if opp and hub.enabled("notion") else "")]
+        done = [f"Rejection from {who}: pipeline set to Closed (lost)"]
         raw, trashed = event["raw"], None
         if self.cfg.mail.delete_rejections and raw.get("uid") is not None:
             try:
@@ -1562,18 +1515,33 @@ class Steward:
             "created_at": now_iso(),
         })
 
-    async def sync_notion(self, hub: MCPHub, errors: list[str]) -> None:
-        if not hub.enabled("notion") or not self.cfg.notion.database_id:
-            return
-        for opp in self.db.query("SELECT id FROM opportunities WHERE notion_synced_at IS NULL OR updated_at > notion_synced_at"):
+    # -- Notion events -> calendar (browser scraping) -------------------------------
+    def notion_due(self) -> bool:
+        return self.cfg.notion.enabled and notion_sync.due(self.cfg, self.db)
+
+    async def sync_notion_events(self, interactive: bool = True, reason: str = "scheduled") -> dict[str, Any]:
+        """Scrape Notion in the signed-in browser and put its events on your calendar. Never raises."""
+        try:
+            async with MCPHub(self.cfg) as hub:
+                summary = await notion_sync.sync(self.cfg, self.db, hub, interactive=interactive, reason=reason)
+        except Exception as exc:  # noqa: BLE001 - the loop must survive anything
+            log.exception("notion sync failed")
+            return {"status": "failed", "detail": str(exc), "added": 0, "added_titles": []}
+        if summary.get("added") and not notify.in_quiet_hours(self.cfg):
+            titles = summary.get("added_titles", [])
             try:
-                await pipeline.notion_push(hub, self.db, opp["id"])
-            except MCPToolError as exc:
-                errors.append(f"notion: {exc}")
-                return
+                await asyncio.to_thread(notify.send, self.cfg, self.db, "notion",
+                                        f"Notion: {summary['added']} new event(s) on your calendar",
+                                        "\n".join(titles[:10]))
+            except Exception as exc:  # noqa: BLE001
+                log.warning("notion notification failed: %s", exc)
+        return summary
 
     async def run_forever(self, tick_seconds: int = 60) -> None:
+        notion_task: asyncio.Task | None = None
         while True:
+            if self.notion_due() and (notion_task is None or notion_task.done()):
+                notion_task = asyncio.create_task(self.sync_notion_events())
             try:
                 summary = await self.cycle()
                 if summary["processed"] or summary["errors"]:

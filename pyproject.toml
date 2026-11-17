@@ -27,6 +27,9 @@ dependencies = [
 
 [project.optional-dependencies]
 google = ["google-api-python-client>=2.100", "google-auth-oauthlib>=1.2"]
+# Notion events -> calendar needs no Python package: it drives the Playwright MCP server (@playwright/mcp)
+# through npx, so it needs Node.js. Kept so `pip install -e ".[notion]"` from older instructions still works.
+notion = []
 dev = ["pytest>=8"]
 
 [project.scripts]

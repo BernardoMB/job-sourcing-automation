@@ -181,17 +181,25 @@ class WhatsAppConfig(BaseModel):
 
 
 class NotionConfig(BaseModel):
+    """Notion events -> your calendar, read through the Playwright MCP server in a browser signed in to your own
+    Notion account (no API token)."""
+
     enabled: bool = False
-    token_env: str = "NOTION_TOKEN"
-    database_id: str = ""
-    # Entries with a date and time in any Notion database the integration can see go on your calendar.
-    calendar_sync: bool = True
-    calendar_poll_minutes: int = 15
-    calendar_lookahead_days: int = 60
-    calendar_default_minutes: int = 60   # an entry with a start time but no end
-    # More workspaces: one integration token per workspace, each in its own .env variable.
-    extra_token_envs: list[str] = Field(default_factory=list)
-    server: ServerSpec | None = None
+    poll_minutes: int = 15
+    # Dated Notion items from today through this many days ahead are put on the calendar.
+    lookahead_days: int = 60
+    # False: every database with a date property (the one named like Date/Time/When, else the first).
+    # True: only databases you view as a calendar or timeline in Notion (the property that view uses).
+    only_calendar_views: bool = False
+    # The Playwright MCP server Job Sourcer starts to drive the browser (needs Node.js; npx fetches it once).
+    playwright_mcp: ServerSpec = Field(default_factory=lambda: ServerSpec(
+        command="npx", args=["-y", "@playwright/mcp@0.0.84"]))
+    # The installed browser it drives: msedge or chrome (installed), or chromium (Playwright's own).
+    browser: Literal["msedge", "chrome", "chromium"] = "msedge"
+    # The browser profile that keeps your Notion sign-in (cookies). Never leaves this computer.
+    profile_dir: str = "secrets/notion-browser"
+    # How long the sign-in window waits for you before the run is logged as NEEDS LOGIN.
+    login_timeout_minutes: int = 15
 
 
 class WorkCalendarConfig(BaseModel):

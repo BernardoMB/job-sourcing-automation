@@ -63,9 +63,6 @@ XAI_API_KEY=
 # Email (IMAP/SMTP). For Gmail: enable 2-Step Verification, then create an App Password.
 STEWARD_MAIL_PASSWORD=
 
-# Notion internal integration token (optional; pipeline mirror)
-NOTION_TOKEN=
-
 # Telegram bot token (optional; notifications)
 TELEGRAM_BOT_TOKEN=
 """

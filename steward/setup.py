@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import re
+import shutil
 import sys
 from pathlib import Path
 from typing import Any
@@ -22,7 +23,6 @@ SECRETS = {
     "ANTHROPIC_API_KEY": "Claude API key",
     "XAI_API_KEY": "Grok API key (only if you use Grok)",
     "STEWARD_MAIL_PASSWORD": "Email app password",
-    "NOTION_TOKEN": "Notion integration secret",
     "TELEGRAM_BOT_TOKEN": "Telegram bot token (optional notifications)",
     "LINKEDIN_TOOLKIT_TOKEN": "LinkedIn toolkit pairing token",
     "WORK_CALENDAR_ICS_URL": "Published work calendar link (ICS)",
@@ -62,8 +62,7 @@ def env_file(cfg: Config) -> Path:
 
 
 def set_secret(cfg: Config, name: str, value: str) -> None:
-    if name not in SECRETS and name not in (cfg.mail.password_env, *notion_token_envs(cfg)) \
-            and not re.fullmatch(r"NOTION_TOKEN_\d+", name):
+    if name not in SECRETS and name != cfg.mail.password_env:
         raise ValueError(f"{name} is not a secret Job Sourcer manages")
     value = value.strip()
     if "\n" in value or "\r" in value:
@@ -87,33 +86,8 @@ def set_secret(cfg: Config, name: str, value: str) -> None:
 
 
 def secret_status(cfg: Config) -> dict[str, bool]:
-    names = set(SECRETS) | {cfg.mail.password_env, *notion_token_envs(cfg)}
+    names = set(SECRETS) | {cfg.mail.password_env}
     return {n: bool(os.environ.get(n)) for n in sorted(names)}
-
-
-def notion_token_envs(cfg: Config) -> list[str]:
-    """The .env names holding one Notion integration token per workspace (the first one also runs the pipeline)."""
-    return list(dict.fromkeys([cfg.notion.token_env, *cfg.notion.extra_token_envs]))
-
-
-def next_notion_token_env(cfg: Config) -> str:
-    """Where a newly connected workspace's token goes: the main name if it is free, else NOTION_TOKEN_2, _3, ..."""
-    if not os.environ.get(cfg.notion.token_env):
-        return cfg.notion.token_env
-    taken = set(notion_token_envs(cfg))
-    n = 2
-    while f"NOTION_TOKEN_{n}" in taken:
-        n += 1
-    return f"NOTION_TOKEN_{n}"
-
-
-def notion_page_id(text: str) -> str:
-    """Accept a Notion page URL or ID and return the 32-hex ID with dashes."""
-    m = re.findall(r"[0-9a-fA-F]{32}", text.replace("-", ""))
-    if not m:
-        raise ValueError("That does not look like a Notion page link or ID")
-    h = m[-1].lower()
-    return f"{h[:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:]}"
 
 
 # -- start at login (Windows) --------------------------------------------------------
@@ -275,18 +249,7 @@ def checks(cfg: Config) -> list[dict[str, Any]]:
                          "Optional. Run `steward whatsapp-link` in a terminal to read and answer recruiters on "
                          "WhatsApp."))
 
-    n = cfg.notion
-    workspaces = [e for e in notion_token_envs(cfg) if os.environ.get(e)]
-    if n.enabled and workspaces:
-        parts = [f"{len(workspaces)} workspace{'s' if len(workspaces) != 1 else ''} connected",
-                 f"events to calendar {'on' if n.calendar_sync else 'off'}",
-                 f"pipeline database {'set' if n.database_id else 'not set'}"]
-        out.append(_step("notion", "Notion", "ok", " · ".join(parts), ""))
-    else:
-        out.append(_step("notion", "Notion", "todo" if n.enabled else "off",
-                         "Optional. Connect your Notion workspaces to put their scheduled entries on your calendar "
-                         "and mirror your pipeline.",
-                         "Add a workspace below with its integration secret."))
+    out.append(notion_check(cfg))
 
     w = cfg.work_calendar
     if w.enabled:
@@ -313,6 +276,41 @@ def checks(cfg: Config) -> list[dict[str, Any]]:
     return out
 
 
+def notion_check(cfg: Config) -> dict[str, Any]:
+    from steward.db import Database
+    from steward.notion_sync import last_status, profile_path
+    from steward.timeutil import ago
+
+    title = "Notion events → calendar"
+    n = cfg.notion
+    if not n.enabled:
+        return _step("notion", title, "off",
+                     "Optional. Reads Notion through the Playwright MCP server, in a browser signed in to your "
+                     "account (no API token).",
+                     "Switch on 'Sync Notion events to my calendar' below, Save, then press Sync now.")
+    if shutil.which(n.playwright_mcp.command) is None:
+        return _step("notion", title, "todo",
+                     f"Node.js is not installed ('{n.playwright_mcp.command}' not found); it runs the Playwright MCP server",
+                     "Install Node.js (LTS) from nodejs.org, then restart Job Sourcer.")
+    last: dict[str, Any] = {}
+    if cfg.db_path.exists():
+        db = Database(cfg.db_path)
+        try:
+            last = last_status(cfg, db)
+        finally:
+            db.close()
+    if not last:
+        signed = profile_path(cfg).exists()
+        return _step("notion", title, "todo", "Not synced yet" + ("" if signed else " · not signed in yet"),
+                     "Press Sync now. If Job Sourcer is not signed in to Notion, a browser window opens: sign in there.")
+    detail = f"Last sync {ago(last.get('at'))}: {last.get('detail', '')}"
+    if last.get("status") == "ok":
+        return _step("notion", title, "ok", detail)
+    if last.get("status") == "needs_login":
+        return _step("notion", title, "todo", detail, "Press Sync now and sign in to Notion in the window that opens.")
+    return _step("notion", title, "warn", detail, "Open the sync log below for details, then press Sync now to retry.")
+
+
 def editable_values(cfg: Config) -> dict[str, Any]:
     p, m = cfg.profile, cfg.mail
     return {
@@ -332,8 +330,9 @@ def editable_values(cfg: Config) -> dict[str, Any]:
         "scheduling.buffer_minutes": cfg.scheduling.buffer_minutes,
         "linkedin.backend": cfg.linkedin.backend,
         "whatsapp.backend": cfg.whatsapp.backend, "whatsapp.business_hours": cfg.whatsapp.business_hours,
-        "notion.enabled": cfg.notion.enabled, "notion.database_id": cfg.notion.database_id,
-        "notion.calendar_sync": cfg.notion.calendar_sync,
+        "notion.enabled": cfg.notion.enabled, "notion.poll_minutes": cfg.notion.poll_minutes,
+        "notion.lookahead_days": cfg.notion.lookahead_days, "notion.browser": cfg.notion.browser,
+        "notion.only_calendar_views": cfg.notion.only_calendar_views,
         "work_calendar.enabled": cfg.work_calendar.enabled, "work_calendar.source": cfg.work_calendar.source,
         "work_calendar.graph_client_id": cfg.work_calendar.graph_client_id,
         "work_calendar.graph_tenant": cfg.work_calendar.graph_tenant, "work_calendar.detail": cfg.work_calendar.detail,

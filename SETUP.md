@@ -8,7 +8,7 @@ Your workspace already exists at `workspace/`:
 - `workspace/.env` holds secrets. You will normally fill it from the dashboard, never by hand.
 
 Everything below is done **once**, from the dashboard's **Setup** tab. No terminal is needed except for the
-one LinkedIn command in step 6.
+LinkedIn command in step 6 and the WhatsApp command in step 7. (Step 8, Notion, needs Node.js installed.)
 
 ## 0. Open Job Sourcer
 
@@ -28,13 +28,14 @@ window. Go to the **Setup** tab. Each step shows *Ready*, *Needs you*, or *Optio
 | 4 | Google Calendar OAuth client (a JSON file) + one click to connect | console.cloud.google.com | free | yes |
 | 5 | linkedin-toolkit Chrome extension + pairing | your Chrome | free | for LinkedIn |
 | 5b | Scan one QR code with WhatsApp (`steward whatsapp-link`) | your phone | free | for WhatsApp |
-| 6 | One Notion integration secret per workspace, shared with your event pages (+ a page for the pipeline) | notion.so | free | optional |
+| 6 | Notion: install Node.js once (runs the Playwright MCP server), then sign in to Notion once in the Edge window Job Sourcer opens | notion.so | free | optional |
 | 6b | Work calendar: a published Outlook calendar link, or an app registration + Microsoft sign-in | outlook.office.com / portal.azure.com | free | optional |
 | 7 | ntfy topic or Telegram bot | ntfy.sh / Telegram | free | optional |
 | 8 | A phone number that emails you voicemails (Google Voice or carrier voicemail-to-email) | voice.google.com / your carrier | free | for calls |
 
 Nothing is sent anywhere except: Claude (to reason about messages), your own email/calendar/LinkedIn/WhatsApp/Notion
-accounts, your work Microsoft 365 calendar (read only), and your notification service if you set one.
+accounts, your work Microsoft 365 calendar (read only), and your notification service if you set one. Notion is
+read by Edge running on this computer with your own Notion session; no Notion integration or API token is used.
 
 ---
 
@@ -236,44 +237,115 @@ Replies go out at most 8 an hour and 30 a day, only during the reply hours (09:0
 tools are not an official WhatsApp API: like any automation of a personal account, they carry some risk of the
 account being restricted, so keep the caps low.
 
-## 8. Notion (optional, Setup → step 8)
+## 8. Notion events → your calendar (optional, Setup → step 8)
 
-Notion does two separate jobs, and you can use either one:
+Job Sourcer reads Notion the way you do: through a **browser signed in to your Notion account**. It does not use a
+Notion integration, an API token, or Notion's public API. Job Sourcer starts the
+[Playwright MCP server](https://github.com/microsoft/playwright-mcp) (`@playwright/mcp`) and drives it as an MCP
+client. The server runs your installed **Microsoft Edge** with its own separate profile, **headless** (no window,
+nothing on your screen), on the Notion web app (`app.notion.com`). Job Sourcer visits **every workspace** your
+account belongs to, collects the dated items in your databases, and adds the ones that are not on your calendar
+yet to the Google Calendar from step 4.
 
-- **Your Notion events on your calendar.** Every 15 minutes, Job Sourcer reads every Notion database you share with
-  it, in every workspace you connect. Each entry with a date **and a time** in the next 60 days goes on your Google
-  Calendar, titled like the entry, with a link back to it. Nobody is invited. Move or rename the entry in Notion and
-  the calendar event follows. Dates without a time (deadlines, all-day notes) are skipped. An entry with a start
-  time but no end gets 1 hour. If you delete a copy from your calendar it is not added back, and deleting the entry
-  in Notion leaves the calendar alone.
-- **Your job pipeline in Notion** (an optional mirror you can also edit). If you move an opportunity to "Offer"
-  there, Job Sourcer stops acting on its own for that thread. Job Sourcer always keeps the pipeline locally too
-  (Pipeline tab).
+**One-time install:** [Node.js](https://nodejs.org) (LTS), which runs the Playwright MCP server. The first sync
+fetches the server with `npx` (pinned to `@playwright/mcp@0.0.84`, `notion.playwright_mcp` in `steward.yaml`); later
+syncs reuse it. No browser download is needed: the server uses the Edge already on this computer. (To use Chrome
+instead, pick *chrome* as the browser in Setup step 8. *chromium* means Playwright's own browser, which needs
+`npx playwright install chromium` and may be blocked by company policy.)
 
-Notion has no sign-in a desktop app like this one can use, so each workspace connects through an *integration*
-you create. Integrations belong to one workspace, so create one per workspace:
+**Turn it on and sign in once:**
 
-1. Go to https://www.notion.so/profile/integrations → **New integration**. Pick the **workspace**, type
-   **Internal**, name it "Job Sourcer", and save.
-2. On the integration's page, copy the **Internal Integration Secret** (it starts with `ntn_` or `secret_`).
-3. In Setup step 8, paste it into the box next to **Add workspace** and press **Add workspace**. Job Sourcer checks
-   the secret with Notion before saving it to `workspace/.env`: the first workspace is `NOTION_TOKEN`, the next ones
-   `NOTION_TOKEN_2`, `NOTION_TOKEN_3`, and so on. Only these names go in `steward.yaml`, never the secrets.
-4. **Share your pages with the integration.** It sees nothing until you do. In Notion, open each page or database
-   that holds your events, then **••• → Connections →** add "Job Sourcer". Sharing a top-level page shares
-   everything under it.
-5. Back in Setup step 8, the workspace list shows each connected workspace and its shared databases that have a
-   date column. If it says *0 databases shared*, step 4 is not done yet.
-6. Repeat steps 1-5 for every workspace you use.
-7. Keep **Put entries with a date and time from my Notion databases on my calendar** switched on (it is on by default).
+1. In Setup step 8, switch on **Sync Notion events to my calendar** and press **Save**.
+2. Press **Sync now**. Job Sourcer checks whether its saved Notion session is still signed in:
+   - **Not signed in** (always true the first time): Job Sourcer starts a second Playwright MCP server, this time
+     with a visible Edge window on the Notion login page. Sign in as you usually do (email code, Google, or Apple;
+     complete any two-step check). As soon as Notion lets you in, the session is kept in the profile and **the
+     window closes by itself**; the sync then carries on headless. You do not need to do anything else.
+   - **Already signed in**: no window opens. The sync runs in the background.
+3. Setup step 8 shows *Ready*, the time of the last sync, and its result.
 
-**Pipeline mirror (optional):** in Notion, create a page called "Job Search" and share it with the integration
-(step 4). Copy the page link (**Share → Copy link**), paste it into Setup step 8, and press **Create the pipeline
-database**. That database is never copied to your calendar.
+**What it keeps:** the browser profile (Notion's sign-in cookies) lives in `workspace/secrets/notion-browser/`. It
+is separate from your everyday Edge profile, never sent anywhere, and ignored by git like the rest of
+`workspace/`. To sign Job Sourcer out, press **Forget Notion session** in Setup step 8 (or delete that folder); the next
+sync opens the login window again.
 
-To disconnect a workspace, press **Remove** next to it: its secret is cleared from `.env`, and events already on your
-calendar stay. Settings are under `notion:` in `steward.yaml`: `calendar_sync`, `calendar_poll_minutes`,
-`calendar_lookahead_days`, `calendar_default_minutes`, and `extra_token_envs`.
+**When the window appears again:** only when the saved session is no longer signed in (you signed out of all
+devices, changed your password, or Notion ended the session). Every other sync stays invisible. If you are not at
+the computer, the window waits up to 15 minutes (`notion.login_timeout_minutes`), then that run is logged as
+`NEEDS LOGIN` and the next scheduled run asks again. A sync never holds up email, LinkedIn, or calendar checks,
+even while the login window waits.
+
+**What gets synced:**
+
+- **Every workspace** your account belongs to is read on every run, including ones you join later: your
+  private pages, pages shared with you, your teamspaces, and every page below them (up to 400 pages per
+  workspace).
+- **Every database with a date property.** The row's date comes from the property named like *Date*, *Date &
+  Time*, *When*, or *Start* (else the first date property). If a database has a calendar or timeline view, the
+  property that view uses wins. To sync only databases you view as a calendar or timeline, tick **Only databases
+  I view as a calendar or timeline in Notion** (`notion.only_calendar_views: true`).
+- Items dated from today through the next 60 days (`notion.lookahead_days`). Items with a time become timed events
+  (in the time zone Notion stored with them, else your time zone from step 1); items with only a date become
+  all-day events that do not block your availability.
+- Each calendar event is titled like the Notion item, links back to it in the description, has no attendees (no
+  invitations are sent), and is tagged with the Notion page id so it is **never added twice**. If you change the
+  date or title in Notion, the existing event is updated. If you delete the event from your calendar, Job Sourcer
+  leaves it deleted. Job Sourcer never deletes calendar events; if a Notion item disappears, the log says so and you
+  decide.
+- Job Sourcer only **reads** Notion. It never edits, creates, or deletes anything there.
+
+**Schedule:** every 15 minutes (`notion.poll_minutes` in `steward.yaml`), plus **Sync now** whenever you want. An
+item you add to any of your Notion workspaces is on your calendar after the next run. From a terminal:
+`steward notion-sync` runs one sync now and `steward notion-log` shows the end of the log.
+
+### Notion sync logs
+
+Every run writes to **`workspace/data/logs/notion-sync.log`** (one line per step, newest at the bottom). Press
+**View sync log** in Setup step 8 to read it in the dashboard (results in color). Each run starts with `START` and
+ends with exactly one result line:
+
+- `SYNC OK   Notion sync through Playwright MCP succeeded: ...`: the scrape and the calendar update succeeded, with
+  the counts of workspaces, events found, added, updated, and unchanged.
+- `SYNC FAILED Notion sync through Playwright MCP failed: ...`: with the reason (for example Node.js or Edge could
+  not start, Notion did not answer, or Google Calendar refused every change). Events already added stay; the next
+  run retries the rest without duplicates.
+- `NEEDS LOGIN`: the session was signed out and nobody signed in within 15 minutes.
+
+Every event the sync puts on your calendar gets its own `ADDED     new event on your calendar: ...` line (title,
+date and time, workspace / database, and the Notion link). Other lines: `BROWSER` (the Playwright MCP server
+started, headless, and the saved session was accepted), `WORKSPACE` (one per workspace read), `UPDATED` (an event
+changed in Notion), `LOGIN` (the login window opened, or you signed in and it closed), `SKIPPED` (you deleted that
+event from your calendar), `GONE` (an item left Notion; its event was kept), `NOTE`, and `ERROR` (one item could
+not be put on the calendar). The Playwright MCP server's own messages go to `workspace/data/logs/mcp-playwright.log`.
+An example:
+
+```text
+2026-11-17 08:10:02 START     notion sync (scheduled) through the Playwright MCP server; saved session: yes
+2026-11-17 08:10:05 BROWSER   Playwright MCP server started (@playwright/mcp@0.0.84, msedge, headless); no window is shown
+2026-11-17 08:10:07 BROWSER   signed in to Notion (saved session); reading your workspaces in the background
+2026-11-17 08:10:38 WORKSPACE William Wilson's Space: 4 page(s), 1 database(s) with dates, 0 dated item(s) in range
+2026-11-17 08:10:38 WORKSPACE bmondragonbrozon's Space: 3 page(s), 1 database(s) with dates, 0 dated item(s) in range
+2026-11-17 08:10:38 WORKSPACE JOB2US: 5 page(s), 2 database(s) with dates, 1 dated item(s) in range
+2026-11-17 08:10:39 ADDED     new event on your calendar: "Intro call" 2026-11-19 10:30-11:00 (America/New_York) [JOB2US / Interviews] https://app.notion.com/415be3ba...
+2026-11-17 08:10:39 SYNC OK   Notion sync through Playwright MCP succeeded: 3 workspace(s), 1 event(s) found, 1 added, 0 updated, 0 unchanged (37.2 s)
+```
+
+When a sync adds events you also get a toast in the dashboard, a desktop alert if you turned them on, and a phone
+notification if you set one up in step 10.
+
+**If something goes wrong:**
+
+- *Google sign-in says "This browser or app may not be secure".* Google sometimes blocks sign-in inside
+  automated browsers. On the Notion login page, choose **Continue with email** and use the login code Notion
+  emails you instead.
+- *`SYNC FAILED ... could not start the Playwright MCP server`.* Check that Node.js is installed (`npx --version`
+  in a terminal) and that this computer can reach the npm registry the first time. Details are in
+  `workspace/data/logs/mcp-playwright.log`.
+- *`SYNC FAILED ... Playwright MCP browser_navigate failed`.* Check that Edge is installed, or choose *chrome* as the
+  browser in Setup step 8. Close any other Job Sourcer instance that may be syncing with the same profile.
+- *The log shows `SYNC FAILED` repeatedly.* Notion may have changed its web app. Press **Sync now** once to retry,
+  and keep the log for troubleshooting.
+- *Step 8 says Node.js is not installed.* Install it from nodejs.org, then restart Job Sourcer.
 
 ## 9. Work calendar: Microsoft 365 (optional, Setup → step 9)
 
@@ -371,8 +443,9 @@ Turn this on so Job Sourcer keeps watching even when its window is closed. Turni
 - Job Sourcer wakes up every **30 seconds** and checks email every **1 minute**, your calendar every **2 minutes**,
   and LinkedIn every **10 minutes**. It copies your work calendar every **10 minutes** and your Notion events every
   **15 minutes**, when those are set up. The intervals are in `steward.yaml`: `mail.poll_minutes`,
-  `calendar.poll_minutes`, `linkedin.poll_minutes`, `work_calendar.poll_minutes`, and
-  `notion.calendar_poll_minutes`. Only new messages cost AI calls.
+  `calendar.poll_minutes`, `linkedin.poll_minutes`, `work_calendar.poll_minutes`, and `notion.poll_minutes`. Only
+  new messages cost AI calls; the Notion sync never calls the AI. Its runs are logged in
+  `workspace/data/logs/notion-sync.log`.
 - **Every new event is processed immediately**: a recruiter email, a LinkedIn message, a calendar invitation, a
   meeting that was moved, cancelled, or declined, a missed call or voicemail. Job Sourcer then either:
   - **acts by itself** (only under rules you created with "Don't ask again" or accepted from its suggestions),

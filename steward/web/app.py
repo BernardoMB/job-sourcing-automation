@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+from collections import deque
 import logging
 import os
 import secrets
@@ -31,6 +32,7 @@ from steward import briefing as briefing_mod
 from steward import decisions
 from steward import linkedin_bridge
 from steward import microsoft
+from steward import notion_sync
 from steward import setup as setup_mod
 from steward import sound
 from steward import tasks as tasks_mod
@@ -72,14 +74,18 @@ def create_app(cfg: Config, watch: bool = True, tick: int | None = None) -> Fast
     token = page_token(cfg)
     lock = asyncio.Lock()
     meetings_cache: dict[str, Any] = {"at": 0.0, "data": []}
-    state: dict[str, Any] = {"running": False, "last_error": "", "version": 0, "last_event": {}}
+    state: dict[str, Any] = {"running": False, "last_error": "", "version": 0, "last_event": {},
+                             "notion_task": None}
 
     def C() -> Config:
         return steward.cfg
 
+    recent: deque[dict[str, Any]] = deque(maxlen=50)
+
     def bump(kind: str, **info: Any) -> None:
         state["version"] += 1
         state["last_event"] = {"kind": kind, "at": now_iso(), **info}
+        recent.append({"version": state["version"], **state["last_event"]})
 
     def execute_on_approve() -> bool:
         return bool(db.kv_get("settings", {}).get("execute_on_approve", C().autonomy.execute_on_approve))
@@ -123,13 +129,40 @@ def create_app(cfg: Config, watch: bool = True, tick: int | None = None) -> Fast
     async def at_startup() -> None:
         await check_linkedin("startup")  # can it read, send, act? Logged in the Logs tab
         await background()
+    def notion_running() -> bool:
+        t = state["notion_task"]
+        return t is not None and not t.done()
+
+    async def notion_job(reason: str) -> None:
+        bump("notion_start", reason=reason)
+        res = await steward.sync_notion_events(interactive=True, reason=reason)
+        meetings_cache["at"] = 0.0
+        bump("notion", status=res.get("status", ""), detail=res.get("detail", ""), added=res.get("added", 0),
+             updated=res.get("updated", 0), titles=res.get("added_titles", [])[:10])
+
+    def start_notion(reason: str) -> bool:
+        """Run a Notion sync in its own task, so a sign-in window never holds up email or LinkedIn."""
+        if notion_running():
+            return False
+        state["notion_task"] = asyncio.create_task(notion_job(reason))
+        return True
+
+    async def notion_loop() -> None:
+        await asyncio.sleep(5)
+        while True:
+            try:
+                if steward.notion_due():
+                    start_notion("scheduled")
+            except Exception:  # noqa: BLE001
+                log.exception("notion scheduling failed")
+            await asyncio.sleep(30)
 
     @contextlib.asynccontextmanager
     async def lifespan(_: FastAPI):
         steward.rescore()
-        task = asyncio.create_task(at_startup()) if watch else None
+        tasks = [asyncio.create_task(at_startup()), asyncio.create_task(notion_loop())] if watch else []
         yield
-        if task:
+        for task in tasks:
             task.cancel()
 
     app = FastAPI(title="Job Sourcer", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
@@ -227,9 +260,15 @@ def create_app(cfg: Config, watch: bool = True, tick: int | None = None) -> Fast
             last_beat = time.time()
             while not await request.is_disconnected():
                 if state["version"] != seen:
+                    # Every event since the last one sent, so a quick "check" right after a Notion sync
+                    # does not hide the sync's result from the page.
+                    batch = [e for e in recent if e["version"] > seen] if seen >= 0 else []
+                    if not batch:
+                        batch = [{"version": state["version"], **state["last_event"]}]
                     seen = state["version"]
-                    payload = {"version": seen, "running": state["running"], **state["last_event"]}
-                    yield f"data: {json.dumps(payload, default=str)}\n\n"
+                    for event in batch:
+                        payload = {**event, "running": state["running"]}
+                        yield f"data: {json.dumps(payload, default=str)}\n\n"
                 elif time.time() - last_beat > 15:
                     last_beat = time.time()
                     yield ": keep-alive\n\n"
@@ -584,7 +623,7 @@ def create_app(cfg: Config, watch: bool = True, tick: int | None = None) -> Fast
     async def setup_probe(name: str) -> dict[str, Any]:
         tools = {"mail": ("whoami", {}), "calendar": ("pending_invites", {"days": 2}), "cv": ("get_profile", {}),
                  "linkedin": ("upstream_tools", {"refresh": True}), "whatsapp": ("health", {}),
-                 "notion": ("notion_status", {}), "workcal": ("status", {})}
+                 "workcal": ("status", {})}
         if name == "llm":
             try:
                 out = await asyncio.to_thread(steward.llm.json, "critique", "Reply with the JSON object requested.",
@@ -618,7 +657,6 @@ def create_app(cfg: Config, watch: bool = True, tick: int | None = None) -> Fast
             else f"backend {r.get('backend')}",
             "whatsapp": lambda r: f"Connected ({r.get('backend')}): {r.get('chats')} chat(s) with messages from "
                                   "others in the last 30 days.",
-            "notion": lambda r: f"Database '{r.get('title')}' reachable",
             "workcal": lambda r: (f"Read your work calendar{' as ' + r['account'] if r.get('account') else ''}: "
                                   f"{r.get('next_7_days')} meeting(s) in the next 7 days."),
         }[name](res)
@@ -633,73 +671,30 @@ def create_app(cfg: Config, watch: bool = True, tick: int | None = None) -> Fast
         meetings_cache["at"] = 0.0
         return {"ok": True, "token": path}
 
-    @app.post("/api/setup/notion")
-    async def setup_notion(body: dict[str, Any]) -> dict[str, Any]:
-        try:
-            page = setup_mod.notion_page_id(body.get("page", ""))
-            temp = C().model_copy(deep=True)
-            temp.notion.enabled = True
-            async with MCPHub(temp) as hub:
-                res = await hub.call("notion", "create_database", {"parent_page_id": page})
-            reload(setup_mod.update_config(C(), {"notion.enabled": True, "notion.database_id": res["database_id"]}))
-        except Exception as exc:  # noqa: BLE001
-            raise bad(exc)
-        return {"ok": True, **res}
+    @app.post("/api/setup/notion/sync")
+    async def setup_notion_sync() -> dict[str, Any]:
+        if not C().notion.enabled:
+            raise HTTPException(400, "Switch on 'Sync Notion events to my calendar' and press Save first")
+        started = start_notion("Sync now")
+        return {"ok": True, "started": started, "running": True}
 
-    async def _notion_workspace(cfg_now, token_env: str) -> dict[str, Any]:
-        temp = cfg_now.model_copy(deep=True)
-        temp.notion.enabled = True
-        if token_env not in setup_mod.notion_token_envs(temp):
-            temp.notion.extra_token_envs = [*temp.notion.extra_token_envs, token_env]
-        async with MCPHub(temp) as hub:
-            return await hub.call("notion", "workspace_status", {"token_env": token_env}, timeout=120)
+    @app.get("/api/notion/status")
+    async def notion_status() -> dict[str, Any]:
+        return {"running": notion_running(), "last": notion_sync.last_status(C(), db),
+                "signed_in_profile": notion_sync.profile_path(C()).exists(),
+                "log_path": str(notion_sync.log_path(C()))}
 
-    @app.get("/api/setup/notion-workspaces")
-    async def notion_workspaces() -> dict[str, Any]:
-        cfg_now, out = C(), []
-        for env in setup_mod.notion_token_envs(cfg_now):
-            if not os.environ.get(env):
-                continue
-            try:
-                res = await _notion_workspace(cfg_now, env)
-                dbs = res["databases"]
-                out.append({"env": env, "ok": True, "workspace": res["workspace"] or "Notion workspace",
-                            "databases": len(dbs), "with_dates": [d["title"] for d in dbs if d["date_properties"]]})
-            except Exception as exc:  # noqa: BLE001
-                out.append({"env": env, "ok": False, "error": str(exc)[:300]})
-        return {"workspaces": out, "calendar_sync": cfg_now.notion.calendar_sync}
+    @app.get("/api/notion/log")
+    async def notion_log(lines: int = 300) -> dict[str, Any]:
+        path = notion_sync.log_path(C())
+        return {"path": str(path), "text": notion_sync.SyncLog(path).tail(min(max(lines, 1), 5000))}
 
-    @app.post("/api/setup/notion-workspace")
-    async def add_notion_workspace(body: dict[str, Any]) -> dict[str, Any]:
-        token = (body.get("token") or "").strip()
-        if not token:
-            raise HTTPException(400, "Paste the integration secret first")
-        cfg_now = C()
-        env = setup_mod.next_notion_token_env(cfg_now)
-        os.environ[env] = token
-        try:
-            res = await _notion_workspace(cfg_now, env)
-        except Exception as exc:  # noqa: BLE001
-            os.environ.pop(env, None)
-            raise HTTPException(400, f"Notion did not accept this secret: {str(exc)[:300]}") from exc
-        setup_mod.set_secret(cfg_now, env, token)
-        extras = [e for e in cfg_now.notion.extra_token_envs if e != env]
-        if env != cfg_now.notion.token_env:
-            extras.append(env)
-        reload(setup_mod.update_config(cfg_now, {"notion.enabled": True, "notion.extra_token_envs": extras}))
-        bump("settings")
-        return {"ok": True, "env": env, "workspace": res["workspace"], "databases": len(res["databases"])}
-
-    @app.post("/api/setup/notion-workspace/remove")
-    async def remove_notion_workspace(body: dict[str, Any]) -> dict[str, Any]:
-        cfg_now, env = C(), body.get("env", "")
-        if env not in setup_mod.notion_token_envs(cfg_now):
-            raise HTTPException(400, "Unknown workspace")
-        setup_mod.set_secret(cfg_now, env, "")
-        reload(setup_mod.update_config(cfg_now, {
-            "notion.extra_token_envs": [e for e in cfg_now.notion.extra_token_envs if e != env]}))
-        bump("settings")
-        return {"ok": True}
+    @app.post("/api/setup/notion/forget")
+    async def setup_notion_forget() -> dict[str, Any]:
+        if notion_running():
+            raise HTTPException(409, "A Notion sync is running; try again when it finishes")
+        removed = await asyncio.to_thread(notion_sync.forget_session, C())
+        return {"ok": True, "removed": removed}
 
     ms_flow: dict[str, Any] = {}
 

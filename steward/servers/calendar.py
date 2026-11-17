@@ -8,7 +8,7 @@ so the executor re-checks availability immediately before every booking.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from steward.scheduling import conflicts, evaluate_slot, find_slots, free_windows
@@ -63,6 +63,28 @@ class SandboxCalendar:
         data["events"].append(event)
         self.store.save(data)
         return {"id": event_id, "meeting_link": link, "html_link": ""}
+
+    def sync_external(self, item: dict[str, Any]) -> dict[str, Any]:
+        data = self.store.load()
+        found = next((e for e in data["events"] if e.get("source_key") == item["source_key"]), None)
+        fields = {k: item[k] for k in ("title", "start", "end", "all_day", "description")}
+        fields["transparent"] = item["all_day"]
+        if found is None:
+            event = {"id": f"stw-{uuid.uuid4().hex[:10]}", "source_key": item["source_key"], "location": "",
+                     "meeting_link": "", "attendees": [], "my_response": "accepted",
+                     "organizer": {"email": cfg.profile.email or "me@example.com", "name": cfg.profile.name},
+                     **fields}
+            data["events"].append(event)
+            self.store.save(data)
+            return {"status": "added", "id": event["id"]}
+        if found.get("status") == "cancelled":
+            return {"status": "deleted_by_you", "id": found["id"]}
+        if all(found.get(k) == v for k, v in fields.items()):
+            return {"status": "unchanged", "id": found["id"]}
+        changed = sorted(k for k, v in fields.items() if found.get(k) != v)
+        found.update(fields)
+        self.store.save(data)
+        return {"status": "updated", "id": found["id"], "changed": changed}
 
     def rsvp(self, event_id: str, response: str) -> dict[str, Any]:
         data = self.store.load()
@@ -197,6 +219,45 @@ class GoogleCalendar:
         ).execute()
         norm = self._norm(res)
         return {"id": res["id"], "meeting_link": norm["meeting_link"], "html_link": res.get("htmlLink", "")}
+
+    def sync_external(self, item: dict[str, Any]) -> dict[str, Any]:
+        """Add or update one event mirrored from another source, found again by its private source key."""
+        if item["all_day"]:
+            start = {"date": item["start"][:10]}
+            end = {"date": item["end"][:10]}
+        else:
+            start, end = {"dateTime": item["start"]}, {"dateTime": item["end"]}
+        body = {"summary": item["title"], "description": item["description"], "start": start, "end": end,
+                "transparency": "transparent" if item["all_day"] else "opaque"}
+        res = self.svc.events().list(calendarId=self.cal, privateExtendedProperty=f"source_key={item['source_key']}",
+                                     showDeleted=True, maxResults=5).execute()
+        existing = res.get("items", [])
+        if not existing:
+            body["extendedProperties"] = {"private": {"steward": "notion", "source_key": item["source_key"]}}
+            created = self.svc.events().insert(calendarId=self.cal, body=body, sendUpdates="none").execute()
+            return {"status": "added", "id": created["id"], "html_link": created.get("htmlLink", "")}
+        live = [e for e in existing if e.get("status") != "cancelled"]
+        if not live:
+            return {"status": "deleted_by_you", "id": existing[0]["id"]}
+        cur = live[0]
+
+        def same(a: dict[str, Any], b: dict[str, Any]) -> bool:
+            if "date" in b:
+                return a.get("date") == b["date"]
+            return "dateTime" in a and parse_iso(a["dateTime"]) == parse_iso(b["dateTime"])
+
+        changed = [k for k, ok in (("title", cur.get("summary", "") == body["summary"]),
+                                   ("description", (cur.get("description") or "") == body["description"]),
+                                   ("start", same(cur.get("start", {}), start)),
+                                   ("end", same(cur.get("end", {}), end))) if not ok]
+        if not changed:
+            return {"status": "unchanged", "id": cur["id"]}
+        if "date" in start:  # switching between timed and all-day needs the other key cleared
+            body["start"], body["end"] = {**start, "dateTime": None}, {**end, "dateTime": None}
+        else:
+            body["start"], body["end"] = {**start, "date": None}, {**end, "date": None}
+        self.svc.events().patch(calendarId=self.cal, eventId=cur["id"], body=body, sendUpdates="none").execute()
+        return {"status": "updated", "id": cur["id"], "changed": changed}
 
     def rsvp(self, event_id: str, response: str) -> dict[str, Any]:
         item = self.svc.events().get(calendarId=self.cal, eventId=event_id).execute()
@@ -412,7 +473,7 @@ def add_invite(
 @guarded
 def sync_copy(uid: str, title: str, start: str, end: str, description: str = "", location: str = "",
               event_id: str = "") -> dict[str, Any]:
-    """Keep a copy of an entry from elsewhere (a Notion row) on your calendar: added once, moved or renamed when the
+    """Keep a copy of an entry from elsewhere (a work-calendar meeting) on your calendar: added once, moved or renamed when the
     entry changes, never duplicated. Nobody is invited or notified. Pass event_id when it was added before: if you
     deleted that copy, it is not added again. Executor only."""
     s, e = _dt(start, "start"), _dt(end, "end")
@@ -455,6 +516,42 @@ def remove_copy(event_id: str, uid: str) -> dict[str, Any]:
         raise ValueError("That event was not made by Job Sourcer")
     b.remove_copy(event_id)
     return {"status": "removed", "id": event_id}
+
+
+@mcp.tool(annotations=WRITE)
+@guarded
+def sync_external_event(
+    source_key: str,
+    title: str,
+    start: str,
+    end: str = "",
+    all_day: bool = False,
+    description: str = "",
+) -> dict[str, Any]:
+    """Put one event from another of your own sources (Notion) on your calendar, without duplicates.
+
+    The event is private to you: no attendees and no invitations are sent. It is found again by
+    `source_key`, so calling this again updates it instead of adding a second copy. An event you
+    deleted from your calendar is left deleted. Returns status added, updated, unchanged, or deleted_by_you.
+    """
+    if not source_key.strip():
+        raise ValueError("source_key is required")
+    if all_day:
+        first = date.fromisoformat(start[:10])
+        last = date.fromisoformat(end[:10]) if end else first
+        if last < first:
+            raise ValueError("end must not be before start")
+        # Calendars store all-day events with an exclusive end date.
+        s_val, e_val = first.isoformat(), (last + timedelta(days=1)).isoformat()
+    else:
+        s = _dt(start, "start")
+        e = _dt(end, "end") if end else s + timedelta(hours=1)
+        if e <= s:
+            e = s + timedelta(hours=1)
+        s_val, e_val = to_iso(s), to_iso(e)
+    return backend().sync_external({"source_key": source_key.strip(), "title": (title or "(untitled)")[:500],
+                                    "start": s_val, "end": e_val, "all_day": all_day,
+                                    "description": description[:4000]})
 
 
 @mcp.tool(annotations=WRITE)

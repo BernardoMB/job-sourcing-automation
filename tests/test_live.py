@@ -151,9 +151,10 @@ def test_dashboard_api(workspace):
 
         setup = client.get("/api/setup").json()
         assert {c["id"] for c in setup["checks"]} >= {"profile", "cv", "llm", "mail", "calendar", "notion"}
-        assert client.post("/api/setup/secret", json={"name": "NOTION_TOKEN", "value": "secret_x"}, headers=h).json()["ok"]
-        assert "NOTION_TOKEN=secret_x" in (workspace.parent / ".env").read_text(encoding="utf-8")
-        assert client.get("/api/setup").json()["secrets"]["NOTION_TOKEN"] is True
+        assert client.post("/api/setup/secret", json={"name": "TELEGRAM_BOT_TOKEN", "value": "secret_x"}, headers=h).json()["ok"]
+        assert "TELEGRAM_BOT_TOKEN=secret_x" in (workspace.parent / ".env").read_text(encoding="utf-8")
+        assert client.get("/api/setup").json()["secrets"]["TELEGRAM_BOT_TOKEN"] is True
+        assert client.post("/api/setup/secret", json={"name": "NOTION_TOKEN", "value": "x"}, headers=h).status_code == 400
         assert client.post("/api/setup/secret", json={"name": "PATH", "value": "x"}, headers=h).status_code == 400
         ok = client.post("/api/setup/config", json={"changes": {"profile.timezone": "America/Mexico_City"}}, headers=h)
         assert ok.status_code == 200 and load_config(workspace).profile.timezone == "America/Mexico_City"
