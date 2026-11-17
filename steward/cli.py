@@ -137,7 +137,7 @@ def doctor() -> None:
 
     async def probe() -> None:
         async with MCPHub(c) as hub:
-            for name in ("cv", "mail", "calendar", "linkedin", "whatsapp", "notion"):
+            for name in ("cv", "mail", "calendar", "linkedin", "whatsapp"):
                 if not hub.enabled(name):
                     row(f"MCP {name}", None, "disabled")
                     continue
@@ -147,9 +147,6 @@ def doctor() -> None:
                     if name == "mail":
                         who = await hub.call("mail", "whoami", {})
                         detail += f", {who['address']} ({who['backend']})"
-                    if name == "notion":
-                        st = await hub.call("notion", "notion_status", {})
-                        detail += f", database '{st['title']}'"
                     if name in ("linkedin", "whatsapp"):
                         ps = await hub.call(name, "pacing_status", {})
                         detail += f", {ps['sent_last_day']}/{ps['daily_cap']} sends today"
@@ -180,20 +177,27 @@ def google_auth() -> None:
     console.print(f"[green]Saved Google token to {token}[/green]")
 
 
-@app.command("notion-init")
-def notion_init(parent_page: str = typer.Option(..., "--parent-page", help="ID of a Notion page shared with your integration")) -> None:
-    """Create the pipeline database in Notion and print the id to put in steward.yaml."""
-    from steward.mcp_hub import MCPHub
+@app.command("notion-sync")
+def notion_sync_cmd(no_login: bool = typer.Option(False, "--no-login", help="Never open the sign-in window")) -> None:
+    """Scrape Notion (headless) and put its events on your calendar now. Opens a sign-in window only if needed."""
+    from steward.notion_sync import log_path
 
-    c = cfg()
-    c.notion.enabled = True
+    s = steward_obj()
+    res = asyncio.run(s.sync_notion_events(interactive=not no_login, reason="command line"))
+    color = {"ok": "green", "needs_login": "yellow"}.get(res.get("status", ""), "red")
+    console.print(f"[{color}]{res.get('status', '').upper()}[/{color}] {res.get('detail', '')}", highlight=False)
+    for title in res.get("added_titles", []):
+        console.print(f"  added: {title}", markup=False, highlight=False)
+    console.print(f"Log: {log_path(s.cfg)}", markup=False, highlight=False)
 
-    async def go() -> dict[str, Any]:
-        async with MCPHub(c) as hub:
-            return await hub.call("notion", "create_database", {"parent_page_id": parent_page})
 
-    res = asyncio.run(go())
-    console.print(f"[green]Created.[/green] Set notion.enabled: true and notion.database_id: {res['database_id']}\n{res.get('url', '')}")
+@app.command("notion-log")
+def notion_log(lines: int = typer.Option(40, help="How many lines to show")) -> None:
+    """Show the end of the Notion sync log."""
+    from steward.notion_sync import SyncLog, log_path
+
+    console.print(SyncLog(log_path(cfg())).tail(lines) or "(no Notion sync has run yet)", markup=False,
+                  highlight=False)
 
 
 # -- the loop -------------------------------------------------------------------

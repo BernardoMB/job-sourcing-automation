@@ -17,7 +17,7 @@ from datetime import timedelta
 from typing import Any
 
 from steward import (acknowledgments, activity, assessments, channels, decisions, linkedin_bridge, mail_cleanup,
-                     notify, pipeline, priority, reconcile, sound)
+                     notify, notion_sync, pipeline, priority, reconcile, sound)
 from steward import tasks as tasks_mod
 from steward.agents import classifier, cv_analyst, drafter, fewshot, instructor, scheduler
 from steward.agents.base import AgentContext
@@ -139,7 +139,6 @@ class Steward:
                 summary["learning"] = await Learner(self.cfg, self.db, self.ledger, self.llm).run()
             except Exception as exc:  # noqa: BLE001 - learning never blocks the loop
                 summary["errors"].append(f"learning: {exc}")
-            await self.sync_notion(hub, summary["errors"])
             try:
                 summary["notified"] = await notify.maybe_notify(self.cfg, self.db, hub)
             except Exception as exc:  # noqa: BLE001
@@ -186,7 +185,7 @@ class Steward:
     async def go(self) -> dict[str, Any]:
         async with MCPHub(self.cfg) as hub:
             result = await Executor(self.cfg, self.db, self.ledger, hub).run_batch()
-            await self.sync_notion(hub, result.setdefault("errors", []))
+            result.setdefault("errors", [])
             # Superseded drafts (calendar changed) get re-drafted right away.
             processed, auto = await self.process_pending(hub, result["errors"])
             result["redrafted"] = processed
@@ -233,7 +232,6 @@ class Steward:
             self.db.execute("UPDATE executions SET status = 'failed', updated_at = ? WHERE draft_id = ? AND status = "
                             "'unknown'", (now_iso(), draft_id))
             result = await Executor(self.cfg, self.db, self.ledger, hub).execute_draft(draft_id, force=True)
-            await self.sync_notion(hub, [])
             await self.cleanup_mail(hub)
         return result
 
@@ -267,7 +265,6 @@ class Steward:
         async with MCPHub(self.cfg) as hub:
             result = await Executor(self.cfg, self.db, self.ledger, hub).execute_draft(draft_id)
             errors: list[str] = []
-            await self.sync_notion(hub, errors)
             await self.cleanup_mail(hub, errors)
             if result["status"] == "superseded":
                 await self.process_pending(hub, errors)
@@ -957,11 +954,6 @@ class Steward:
             self.record_assessment(event, test, opp)
         tasks_mod.suggest_from_classification(self.cfg, self.db, self.ledger, cls, event["id"],
                                               opp["id"] if opp else None)
-        if opp and ctx.hub.enabled("notion"):
-            try:
-                opp = await pipeline.notion_pull(ctx.hub, self.db, opp)
-            except MCPToolError as exc:
-                log.warning("notion pull failed: %s", exc)
         self.db.update("events", event["id"], {"opportunity_id": opp["id"] if opp else None})
         if self._plain_rejection(event, cls):
             return await self._close_rejected(ctx.hub, event, cls, opp)
@@ -1033,14 +1025,13 @@ class Steward:
 
     async def _close_rejected(self, hub: MCPHub, event: dict[str, Any], cls: dict[str, Any],
                               opp: dict[str, Any] | None) -> str:
-        """Close the opportunity (Notion follows in this check's sync) and move the email to Trash. No reply."""
+        """Close the opportunity and move the email to Trash. No reply."""
         who = (opp or {}).get("company") or cls.get("company") or event.get("sender_name") or event.get("sender_address")
         if opp:
-            # The email is the newest news: it wins over a stage just pulled from Notion.
+            # The email is the newest news: it wins over the stage on record.
             pipeline.set_stage(self.db, opp["id"], "closed_lost", force=True)
             self.db.update("opportunities", opp["id"], {"next_action": "Turned down: not moving forward"})
-        done = [f"Rejection from {who}: pipeline set to Closed (lost)"
-                + (" (Notion is updated in this check)" if opp and hub.enabled("notion") else "")]
+        done = [f"Rejection from {who}: pipeline set to Closed (lost)"]
         raw, trashed = event["raw"], None
         if self.cfg.mail.delete_rejections and raw.get("uid") is not None:
             try:
@@ -1238,18 +1229,33 @@ class Steward:
             "created_at": now_iso(),
         })
 
-    async def sync_notion(self, hub: MCPHub, errors: list[str]) -> None:
-        if not hub.enabled("notion"):
-            return
-        for opp in self.db.query("SELECT id FROM opportunities WHERE notion_synced_at IS NULL OR updated_at > notion_synced_at"):
+    # -- Notion events -> calendar (browser scraping) -------------------------------
+    def notion_due(self) -> bool:
+        return self.cfg.notion.enabled and notion_sync.due(self.cfg, self.db)
+
+    async def sync_notion_events(self, interactive: bool = True, reason: str = "scheduled") -> dict[str, Any]:
+        """Scrape Notion in the signed-in browser and put its events on your calendar. Never raises."""
+        try:
+            async with MCPHub(self.cfg) as hub:
+                summary = await notion_sync.sync(self.cfg, self.db, hub, interactive=interactive, reason=reason)
+        except Exception as exc:  # noqa: BLE001 - the loop must survive anything
+            log.exception("notion sync failed")
+            return {"status": "failed", "detail": str(exc), "added": 0, "added_titles": []}
+        if summary.get("added") and not notify.in_quiet_hours(self.cfg):
+            titles = summary.get("added_titles", [])
             try:
-                await pipeline.notion_push(hub, self.db, opp["id"])
-            except MCPToolError as exc:
-                errors.append(f"notion: {exc}")
-                return
+                await asyncio.to_thread(notify.send, self.cfg, self.db, "notion",
+                                        f"Notion: {summary['added']} new event(s) on your calendar",
+                                        "\n".join(titles[:10]))
+            except Exception as exc:  # noqa: BLE001
+                log.warning("notion notification failed: %s", exc)
+        return summary
 
     async def run_forever(self, tick_seconds: int = 60) -> None:
+        notion_task: asyncio.Task | None = None
         while True:
+            if self.notion_due() and (notion_task is None or notion_task.done()):
+                notion_task = asyncio.create_task(self.sync_notion_events())
             try:
                 summary = await self.cycle()
                 if summary["processed"] or summary["errors"]:

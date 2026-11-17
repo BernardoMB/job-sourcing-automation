@@ -1,4 +1,4 @@
-"""MCP client hub: every integration (email, calendar, CV, LinkedIn, Notion) is an MCP server.
+"""MCP client hub: every integration (email, calendar, CV, LinkedIn) is an MCP server.
 
 Each server runs as its own stdio subprocess and receives only its own
 credentials. Servers start lazily on first use. If one server fails, the
@@ -30,7 +30,6 @@ BUILTIN_MODULES = {
     "cv": "steward.servers.cv",
     "linkedin": "steward.servers.linkedin",
     "whatsapp": "steward.servers.whatsapp",
-    "notion": "steward.servers.notion",
 }
 
 # Outward-facing tools: executor only.
@@ -85,7 +84,6 @@ class MCPHub:
             "calendar": c.calendar.backend != "disabled",
             "linkedin": c.linkedin.backend != "disabled",
             "whatsapp": c.whatsapp.backend != "disabled",
-            "notion": c.notion.enabled,
             "cv": True,
         }.get(name, False)
 
@@ -97,8 +95,6 @@ class MCPHub:
         keys: list[str] = []
         if name == "mail":
             keys.append(self.cfg.mail.password_env)
-        elif name == "notion":
-            keys.append(self.cfg.notion.token_env)
         elif name == "linkedin" and self.cfg.linkedin.upstream and self.cfg.linkedin.upstream.token_env:
             keys.append(self.cfg.linkedin.upstream.token_env)
         return {k: os.environ[k] for k in keys if k in os.environ}

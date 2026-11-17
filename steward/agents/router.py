@@ -1,7 +1,7 @@
 """Decision Router subagent: may this action run without you, or must it wait?
 
-It is a layered, deterministic judge. It reads the pipeline (Notion via MCP,
-cached in SQLite), the decision rules you approved, the calibration learned from
+It is a layered, deterministic judge. It reads the pipeline (kept in
+SQLite), the decision rules you approved, the calibration learned from
 your decision ledger, and the drafter's and reviewer's scores. LLM output can
 lower autonomy but can never raise it: only rules you activated grant autonomy.
 

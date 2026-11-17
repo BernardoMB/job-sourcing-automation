@@ -27,6 +27,8 @@ dependencies = [
 
 [project.optional-dependencies]
 google = ["google-api-python-client>=2.100", "google-auth-oauthlib>=1.2"]
+# Notion events -> calendar: scrapes Notion in your installed Edge/Chrome through Playwright.
+notion = ["playwright>=1.48"]
 dev = ["pytest>=8"]
 
 [project.scripts]

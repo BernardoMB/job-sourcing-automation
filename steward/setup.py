@@ -22,7 +22,6 @@ SECRETS = {
     "ANTHROPIC_API_KEY": "Claude API key",
     "XAI_API_KEY": "Grok API key (only if you use Grok)",
     "STEWARD_MAIL_PASSWORD": "Email app password",
-    "NOTION_TOKEN": "Notion integration secret",
     "TELEGRAM_BOT_TOKEN": "Telegram bot token (optional notifications)",
     "LINKEDIN_TOOLKIT_TOKEN": "LinkedIn toolkit pairing token",
 }
@@ -61,7 +60,7 @@ def env_file(cfg: Config) -> Path:
 
 
 def set_secret(cfg: Config, name: str, value: str) -> None:
-    if name not in SECRETS and name != cfg.mail.password_env and name != cfg.notion.token_env:
+    if name not in SECRETS and name != cfg.mail.password_env:
         raise ValueError(f"{name} is not a secret Job Sourcer manages")
     value = value.strip()
     if "\n" in value or "\r" in value:
@@ -85,17 +84,8 @@ def set_secret(cfg: Config, name: str, value: str) -> None:
 
 
 def secret_status(cfg: Config) -> dict[str, bool]:
-    names = set(SECRETS) | {cfg.mail.password_env, cfg.notion.token_env}
+    names = set(SECRETS) | {cfg.mail.password_env}
     return {n: bool(os.environ.get(n)) for n in sorted(names)}
-
-
-def notion_page_id(text: str) -> str:
-    """Accept a Notion page URL or ID and return the 32-hex ID with dashes."""
-    m = re.findall(r"[0-9a-fA-F]{32}", text.replace("-", ""))
-    if not m:
-        raise ValueError("That does not look like a Notion page link or ID")
-    h = m[-1].lower()
-    return f"{h[:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:]}"
 
 
 # -- start at login (Windows) --------------------------------------------------------
@@ -257,16 +247,7 @@ def checks(cfg: Config) -> list[dict[str, Any]]:
                          "Optional. Run `steward whatsapp-link` in a terminal to read and answer recruiters on "
                          "WhatsApp."))
 
-    n = cfg.notion
-    if n.enabled:
-        has = bool(os.environ.get(n.token_env))
-        ok = has and bool(n.database_id)
-        out.append(_step("notion", "Notion pipeline", "ok" if ok else "todo",
-                         f"database {n.database_id or '(none)'}" + ("" if has else " · no token"),
-                         "Paste the integration secret below, then create the database from a shared page."))
-    else:
-        out.append(_step("notion", "Notion pipeline", "off", "Optional. Your pipeline is always kept locally too.",
-                         "Turn it on below if you want the pipeline mirrored to Notion."))
+    out.append(notion_check(cfg))
 
     nt = cfg.notifications
     alerts = (["sound on new events"] if nt.sound else []) + nt.channels
@@ -278,6 +259,39 @@ def checks(cfg: Config) -> list[dict[str, Any]]:
                      "enabled" if sf and sf.exists() else "Job Sourcer runs only while you start it",
                      "Turn on start-at-login so Job Sourcer keeps watching without you opening anything."))
     return out
+
+
+def notion_check(cfg: Config) -> dict[str, Any]:
+    from steward.db import Database
+    from steward.notion_sync import last_status, profile_path
+    from steward.timeutil import ago
+
+    title = "Notion events → calendar"
+    n = cfg.notion
+    if not n.enabled:
+        return _step("notion", title, "off",
+                     "Optional. Reads Notion through a browser signed in to your account (no API token).",
+                     "Switch on 'Sync Notion events to my calendar' below, Save, then press Sync now.")
+    if importlib.util.find_spec("playwright") is None:
+        return _step("notion", title, "todo", "Playwright is not installed",
+                     'Run once in the project folder:  .venv\\Scripts\\pip install -e ".[notion]"')
+    last: dict[str, Any] = {}
+    if cfg.db_path.exists():
+        db = Database(cfg.db_path)
+        try:
+            last = last_status(cfg, db)
+        finally:
+            db.close()
+    if not last:
+        signed = profile_path(cfg).exists()
+        return _step("notion", title, "todo", "Not synced yet" + ("" if signed else " · not signed in yet"),
+                     "Press Sync now. If Job Sourcer is not signed in to Notion, a browser window opens: sign in there.")
+    detail = f"Last sync {ago(last.get('at'))}: {last.get('detail', '')}"
+    if last.get("status") == "ok":
+        return _step("notion", title, "ok", detail)
+    if last.get("status") == "needs_login":
+        return _step("notion", title, "todo", detail, "Press Sync now and sign in to Notion in the window that opens.")
+    return _step("notion", title, "warn", detail, "Open the sync log below for details, then press Sync now to retry.")
 
 
 def editable_values(cfg: Config) -> dict[str, Any]:
@@ -299,7 +313,9 @@ def editable_values(cfg: Config) -> dict[str, Any]:
         "scheduling.buffer_minutes": cfg.scheduling.buffer_minutes,
         "linkedin.backend": cfg.linkedin.backend,
         "whatsapp.backend": cfg.whatsapp.backend, "whatsapp.business_hours": cfg.whatsapp.business_hours,
-        "notion.enabled": cfg.notion.enabled, "notion.database_id": cfg.notion.database_id,
+        "notion.enabled": cfg.notion.enabled, "notion.poll_minutes": cfg.notion.poll_minutes,
+        "notion.lookahead_days": cfg.notion.lookahead_days, "notion.browser": cfg.notion.browser,
+        "notion.only_calendar_views": cfg.notion.only_calendar_views,
         "notifications.channels": cfg.notifications.channels, "notifications.ntfy_url": cfg.notifications.ntfy_url,
         "notifications.telegram_chat_id": cfg.notifications.telegram_chat_id,
         "notifications.quiet_hours": cfg.notifications.quiet_hours,

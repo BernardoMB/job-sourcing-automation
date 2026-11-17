@@ -176,10 +176,21 @@ class WhatsAppConfig(BaseModel):
 
 
 class NotionConfig(BaseModel):
+    """Notion events -> your calendar, read by a browser signed in to your own Notion account (no API token)."""
+
     enabled: bool = False
-    token_env: str = "NOTION_TOKEN"
-    database_id: str = ""
-    server: ServerSpec | None = None
+    poll_minutes: int = 15
+    # Dated Notion items from today through this many days ahead are put on the calendar.
+    lookahead_days: int = 60
+    # False: every database with a date property (the one named like Date/Time/When, else the first).
+    # True: only databases you view as a calendar or timeline in Notion (the property that view uses).
+    only_calendar_views: bool = False
+    # The installed browser Playwright drives: msedge or chrome (installed), or chromium (Playwright's own).
+    browser: Literal["msedge", "chrome", "chromium"] = "msedge"
+    # The browser profile that keeps your Notion sign-in (cookies). Never leaves this computer.
+    profile_dir: str = "secrets/notion-browser"
+    # How long the sign-in window waits for you before the run is logged as NEEDS LOGIN.
+    login_timeout_minutes: int = 15
 
 
 class CVConfig(BaseModel):

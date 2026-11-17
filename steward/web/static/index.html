@@ -59,6 +59,8 @@ header.top { position: sticky; top: 0; z-index: 5; background: var(--panel); bor
 @keyframes pulse { from { opacity: .35; } to { opacity: 1; } }
 .btn { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 7px 14px; cursor: pointer; }
 .btn:hover { border-color: var(--muted); }
+.logbox { font: 12.5px/1.45 var(--mono); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; max-height: 360px; overflow: auto; white-space: pre-wrap; word-break: break-word; margin: 8px 0 0; }
+.logbox .l-ok { color: var(--ok); font-weight: 600; } .logbox .l-bad { color: var(--high); font-weight: 600; } .logbox .l-warn { color: var(--warn); font-weight: 600; } .logbox .l-add { color: var(--info); }
 .btn:disabled { opacity: .5; cursor: default; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
 .btn.danger { color: var(--high); }
@@ -422,6 +424,16 @@ function startStream() {
     if (lastVersion === null) { lastVersion = ev.version; return; }
     lastVersion = ev.version;
     if (ev.kind === "checking") { const d = $("#status .dot"); if (d) d.className = "dot busy"; return; }
+    if (ev.kind === "notion_start") { notionBusy = true; const b = $("#notionSync"); if (b) b.textContent = "Syncing…"; if (notionLogOpen) loadNotionLog(); return; }
+    if (ev.kind === "notion") {
+      notionBusy = false;
+      const msg = ev.status === "ok" ? (ev.added ? `Notion: ${ev.added} new event${ev.added === 1 ? "" : "s"} added to your calendar${ev.titles && ev.titles.length ? ": " + ev.titles.slice(0, 3).join(", ") : ""}.` : ev.updated ? `Notion synced: ${ev.updated} event(s) updated.` : "")
+        : ev.status === "needs_login" ? "Notion sync: not signed in. Press Sync now in Setup and sign in to Notion." : `Notion sync failed: ${ev.detail}`;
+      if (msg) toast(msg, 8000);
+      if (ev.added) notifyDesktop("Job Sourcer", msg);
+      if (tab === "setup" && !isEditing()) renderSetup();
+      return;
+    }
     if (ev.kind === "cycle") {
       const parts = [];
       if (ev.processed) parts.push(`${ev.processed} new item${ev.processed === 1 ? "" : "s"}`);
@@ -1060,7 +1072,7 @@ function renderPipeline() {
   const host = $("#tab-pipeline");
   host.innerHTML = `<div class="pill-row">${Object.entries(B.pipeline.by_stage).map(([s, n]) => `<span class="chip ${n ? "info" : ""}">${esc(B.stages[s])}: ${n}</span>`).join("")}</div>
     <div id="pipeTable"></div>
-    <p class="meta">Moving a thread to “Offer” revokes all autonomy for it. Edits here (or in Notion, if enabled) are what the Decision Router reads.</p>`;
+    <p class="meta">Moving a thread to “Offer” revokes all autonomy for it. Edits here are what the Decision Router reads.</p>`;
   const stageOrder = Object.keys(B.stages);
   dataTable($("#pipeTable"), {
     id: "pipeline", rows: B.pipeline.opportunities, noun: "opportunities",
@@ -1162,7 +1174,19 @@ async function renderLedger() {
 }
 
 // ---------- setup ----------
+let notionLogOpen = false, notionBusy = false;
+async function loadNotionLog() {
+  const box = $("#notionLog"); if (!box) return;
+  try {
+    const r = await api("/api/notion/log?lines=400");
+    $("#notionLogPath").textContent = r.path;
+    const cls = (l) => /\bSYNC OK\b/.test(l) ? "l-ok" : /\bSYNC FAILED\b|\bERROR\b/.test(l) ? "l-bad" : /\bNEEDS LOGIN\b|\bLOGIN\b|\bGONE\b|\bSKIPPED\b/.test(l) ? "l-warn" : /\b(ADDED|UPDATED)\b/.test(l) ? "l-add" : "";
+    box.innerHTML = r.text ? r.text.trimEnd().split("\n").map(l => { const c = cls(l); return c ? `<span class="${c}">${esc(l)}</span>` : esc(l); }).join("\n") : "No Notion sync has run yet. Press Sync now.";
+    box.scrollTop = box.scrollHeight;
+  } catch (e) { box.textContent = "Could not read the log: " + e.message; }
+}
 async function renderSetup() {
+  try { notionBusy = (await api("/api/notion/status")).running; } catch (e) { /* ignore */ }
   const S = await api("/api/setup");
   const v = S.values, host = $("#tab-setup");
   const status = (id) => S.checks.find(c => c.id === id) || {};
@@ -1220,9 +1244,16 @@ async function renderSetup() {
     ${step(7, "whatsapp", "WhatsApp (your own account)", `<div class="meta">Reads one-to-one chats through whatsapp-mcp-ts, linked to your WhatsApp as a linked device (like WhatsApp Web). Only chats about a job are kept and answered; every other chat is ignored completely. Groups are never read. To install and link it, run <span class="mono">steward whatsapp-link</span> in a terminal once and scan the QR code with WhatsApp (Settings &gt; Linked devices).</div>
       <div class="grid2">${field("whatsapp.backend", "Backend", ["disabled", "upstream", "sandbox"])}${field("whatsapp.business_hours", "Reply hours")}</div>
       <div class="buttons">${save(["whatsapp.backend", "whatsapp.business_hours"])} ${test("whatsapp")}</div>`)}
-    ${step(8, "notion", "Notion pipeline (optional)", `${secret("NOTION_TOKEN")}
-      <div class="row"><input type="text" id="notionPage" placeholder="Link to a Notion page shared with your integration" style="flex:1"><button class="btn small" id="notionBtn">Create the pipeline database</button></div>
-      <div class="buttons">${test("notion")}</div>`)}
+    ${step(8, "notion", "Notion events → your calendar (optional)", `<div class="meta">Job Sourcer reads Notion in a hidden browser signed in to your own Notion account (no integration or API token), in every workspace you belong to, and adds new dated items to your Google Calendar. A browser window opens <b>only</b> when it is not signed in: sign in there and it closes by itself.</div>
+      <label class="switch"><input type="checkbox" id="notionOn" ${v["notion.enabled"] ? "checked" : ""}> Sync Notion events to my calendar</label>
+      <div class="grid2">${field("notion.poll_minutes", "Check every (minutes)")}${field("notion.lookahead_days", "Days ahead to sync")}
+        ${field("notion.browser", "Browser", ["msedge", "chrome", "chromium"], "msedge = your installed Microsoft Edge")}</div>
+      <label class="switch"><input type="checkbox" id="notionCalOnly" ${v["notion.only_calendar_views"] ? "checked" : ""}> Only databases I view as a calendar or timeline in Notion</label>
+      <div class="buttons"><button class="btn small primary" id="notionSave">Save</button>
+        <button class="btn small" id="notionSync" ${v["notion.enabled"] ? "" : "disabled"}>${notionBusy ? "Syncing…" : "Sync now"}</button>
+        <button class="btn small" id="notionLogBtn">${notionLogOpen ? "Hide sync log" : "View sync log"}</button>
+        <button class="btn small" id="notionForget">Forget Notion session</button></div>
+      <div id="notionLogWrap" class="${notionLogOpen ? "" : "hidden"}"><div class="meta">Log file: <span class="mono" id="notionLogPath"></span> · newest at the bottom</div><pre class="logbox" id="notionLog">Loading…</pre></div>`)}
     ${step(9, "notifications", "Notifications", `<label class="switch"><input type="checkbox" id="soundOn" ${v["notifications.sound"] ? "checked" : ""}> Play a sound on this computer when new events arrive (a recruiter message, call, invite, or meeting change)</label>
       <div class="buttons"><button class="btn small" id="soundTest">Play test sound</button><span class="result" id="soundResult"></span></div>
       <div class="meta">Phone notifications (optional):</div>
@@ -1258,7 +1289,21 @@ async function renderSetup() {
   $("#liUse").addEventListener("click", () => act(() => api("/api/setup/config", "POST", { changes: { "linkedin.backend": "upstream",
     "linkedin.upstream": { url: "http://127.0.0.1:47830/mcp", token_env: "LINKEDIN_TOOLKIT_TOKEN", command: "", args: [], env: {}, tools: {} } } }),
     "LinkedIn set to the linkedin-toolkit bridge. Save the pairing token, then press Test connection.").then(renderSetup));
-  $("#notionBtn").addEventListener("click", () => { const page = $("#notionPage").value.trim(); if (!page) return toast("Paste the Notion page link first."); act(() => api("/api/setup/notion", "POST", { page }), (r) => `Notion database created${r.url ? ": " + r.url : ""}.`).then(renderSetup); });
+  $("#notionSave").addEventListener("click", () => act(() => api("/api/setup/config", "POST", { changes: {
+      "notion.enabled": $("#notionOn").checked, "notion.only_calendar_views": $("#notionCalOnly").checked,
+      "notion.poll_minutes": parseInt(host.querySelector('[data-k="notion.poll_minutes"]').value || "15", 10),
+      "notion.lookahead_days": parseInt(host.querySelector('[data-k="notion.lookahead_days"]').value || "60", 10),
+      "notion.browser": host.querySelector('[data-k="notion.browser"]').value } }), "Saved.").then(renderSetup));
+  $("#notionSync").addEventListener("click", async () => {
+    try {
+      const r = await api("/api/setup/notion/sync", "POST", {});
+      notionBusy = true; $("#notionSync").textContent = "Syncing…";
+      toast(r.started ? "Syncing Notion in the background. If you are not signed in, a browser window opens: sign in there." : "A Notion sync is already running.", 8000);
+    } catch (e) { toast("Error: " + e.message, 7000); }
+  });
+  $("#notionLogBtn").addEventListener("click", () => { notionLogOpen = !notionLogOpen; $("#notionLogWrap").classList.toggle("hidden", !notionLogOpen); $("#notionLogBtn").textContent = notionLogOpen ? "Hide sync log" : "View sync log"; if (notionLogOpen) loadNotionLog(); });
+  $("#notionForget").addEventListener("click", () => { if (!confirm("Forget the saved Notion session? The next sync opens a browser window for you to sign in again.")) return; act(() => api("/api/setup/notion/forget", "POST", {}), (r) => r.removed ? "Notion session forgotten." : "There was no saved session.").then(renderSetup); });
+  if (notionLogOpen) loadNotionLog();
   $("#notifSave").addEventListener("click", () => {
     const ntfy = host.querySelector('[data-k="notifications.ntfy_url"]').value.trim(), chat = host.querySelector('[data-k="notifications.telegram_chat_id"]').value.trim();
     const channels = [...(ntfy ? ["ntfy"] : []), ...(chat ? ["telegram"] : [])];

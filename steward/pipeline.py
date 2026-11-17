@@ -1,4 +1,4 @@
-"""The job pipeline: every opportunity, its stage, its threads. Mirrored to Notion when enabled."""
+"""The job pipeline: every opportunity, its stage, its threads."""
 
 from __future__ import annotations
 
@@ -6,9 +6,8 @@ import re
 from typing import Any
 
 from steward.db import Database
-from steward.mcp_hub import MCPHub
 from steward.taxonomy import SIGNAL_TO_STAGE, advance_stage
-from steward.timeutil import now_iso, parse_iso, to_iso
+from steward.timeutil import now_iso
 
 
 def _domain(address: str) -> str:
@@ -140,44 +139,3 @@ def record_outbound(db: Database, opp_id: int | None, next_action: str = "") -> 
     if opp and opp["stage"] == "new":
         updates["stage"] = "contacted"
     db.update("opportunities", opp_id, updates)
-
-
-async def notion_pull(hub: MCPHub, db: Database, opp: dict[str, Any]) -> dict[str, Any]:
-    """Read the row from Notion. A stage you changed in Notion wins over Job Sourcer's cache."""
-    if not hub.enabled("notion"):
-        return opp
-    res = await hub.call("notion", "query_opportunities", {"steward_id": opp["id"]})
-    rows = res.get("results", [])
-    if not rows:
-        return opp
-    row = rows[0]
-    updates: dict[str, Any] = {"notion_page_id": row["page_id"]}
-    edited = parse_iso(row.get("last_edited_time"))
-    synced = parse_iso(opp.get("notion_synced_at"))
-    if row.get("stage") and row["stage"] != opp["stage"] and (synced is None or (edited and edited > synced)):
-        updates["stage"] = row["stage"]
-    if row.get("next_action") and row["next_action"] != (opp.get("next_action") or "") and edited and synced and edited > synced:
-        updates["notes"] = ((opp.get("notes") or "") + f"\n[Notion] {row['next_action']}").strip()
-    db.update("opportunities", opp["id"], updates)
-    return db.get_opportunity(opp["id"]) or opp
-
-
-async def notion_push(hub: MCPHub, db: Database, opp_id: int) -> None:
-    if not hub.enabled("notion"):
-        return
-    opp = db.get_opportunity(opp_id)
-    if not opp:
-        return
-    res = await hub.call("notion", "upsert_opportunity", {
-        "steward_id": opp["id"], "company": opp.get("company") or "", "role": opp.get("role") or "",
-        "stage": opp["stage"], "recruiter": opp.get("recruiter_name") or "",
-        "recruiter_email": opp.get("recruiter_email") or "", "channel": opp.get("channel") or "",
-        "last_contact": (opp.get("last_inbound_at") or opp.get("last_outbound_at") or "")[:10],
-        "next_action": opp.get("next_action") or "", "page_id": opp.get("notion_page_id") or "",
-    })
-    # Our own write bumps Notion's last_edited_time; record the later of the two so it is not
-    # mistaken for an edit you made in Notion.
-    edited = parse_iso(res.get("last_edited_time"))
-    synced = max(now_iso(), to_iso(edited)) if edited else now_iso()
-    db.update("opportunities", opp_id, {"notion_page_id": res.get("page_id", opp.get("notion_page_id")),
-                                        "notion_synced_at": synced})

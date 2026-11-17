@@ -119,7 +119,7 @@ provider** so it never spends your Claude usage; its drafts are template-quality
    only use CV evidence, the schedule, and your profile; it follows your standing preferences and imitates your most
    similar past decisions (dynamic few-shot from the ledger, including your edits).
 5. **Reviewer** (LLM): scores job advancement and confidence, and escalates unsupported claims.
-6. **Decision Router** (`agents/router.py`, deterministic): reads the pipeline (Notion via MCP if enabled), your
+6. **Decision Router** (`agents/router.py`, deterministic): reads the pipeline (kept in SQLite), your
    rules, and calibration learned from your ledger. LLM scores can lower autonomy, never raise it.
 
 **Hard guardrails** (always route to you, in this order): offer-stage lockout, sensitive categories (salary,
@@ -237,10 +237,14 @@ the project folder; otherwise pass `-c path/to/steward.yaml`.
    LinkedIn's (`hourly_cap`, `daily_cap`, `business_hours`, `min/max_delay_seconds`). The upstream is started for
    each check and given `settle_seconds` (20) to receive what arrived while it was offline. Sandbox:
    `steward sandbox-whatsapp --name "..." --text "..."`.
-8. **Notion** (optional pipeline mirror, `notion:`): create an internal integration at notion.so/my-integrations,
-   put the token in `.env` as `NOTION_TOKEN`, share a page with the integration, then
-   `steward notion-init --parent-page <page id>` and set `notion.enabled: true` and `notion.database_id`. If you
-   move an opportunity to "Offer" in Notion, the router sees it and revokes autonomy for that thread.
+8. **Notion events → calendar** (optional, `notion:`): scraped, not through an API. `pip install -e ".[notion]"`,
+   then `notion.enabled: true`. Playwright drives your installed Edge (`notion.browser`) with its own profile in
+   `secrets/notion-browser/`, headless. Only when that profile is not signed in does an Edge window open on the
+   Notion login page; you sign in, the window closes, and the session is kept. Every `notion.poll_minutes` it reads
+   every workspace and every database with a date property, and puts items dated within `notion.lookahead_days` on
+   your calendar (no attendees, never twice, updated when they change in Notion). Every run is logged to
+   `data/logs/notion-sync.log` (`START`, `WORKSPACE`, `ADDED`/`UPDATED` per event, and `SYNC OK` / `SYNC FAILED` /
+   `NEEDS LOGIN`); `steward notion-sync` runs one now and `steward notion-log` shows the log. SETUP.md step 8.
 9. **Notifications** (optional, `notifications:`): `ntfy` (self-hostable push to your phone) and/or Telegram; quiet
    hours, a minimum number of pending decisions, cooldown, and reminders before job meetings.
 10. Check everything:
@@ -293,13 +297,13 @@ recruiter goes quiet for `autonomy.follow_up_after_days` (5) days.
 
 ## FAQ
 
-**Is Notion real?** Yes. `steward/servers/notion.py` calls the real Notion API (api.notion.com) with your own
-integration secret. It is **optional and off by default**: your pipeline is always stored locally in SQLite (the
-Pipeline tab); Notion is a mirror you can also edit. It needs a Notion internal-integration secret
-(`NOTION_TOKEN`, pasted in Setup) and a page shared with that integration (SETUP.md step 7).
+**Is Notion real?** Yes, and it uses no Notion API token. `steward/notion_sync.py` drives your installed Edge
+through Playwright, signed in to your own Notion account, and reads the same records the Notion web app
+(app.notion.com) loads for you (`steward/notion_scrape.py`). It puts your dated Notion items on your calendar. It is
+**optional and off by default** (SETUP.md step 8). Your job pipeline is stored locally in SQLite (the Pipeline tab).
 
 **Do I need to install MCP servers?** No, with one exception. Job Sourcer ships five MCP servers (`steward/servers/`:
-mail, calendar, cv, linkedin, notion) and starts each one automatically, as its own subprocess with only its own
+mail, calendar, cv, linkedin, whatsapp) and starts each one automatically, as its own subprocess with only its own
 credentials, whenever it needs it. The exception is LinkedIn: Job Sourcer's LinkedIn server is a rate-limited proxy in
 front of the open-source **linkedin-toolkit** (Chrome extension + local server, run with `npx linkedin-toolkit-mcp`),
 because the only safe way to use LinkedIn is through your own logged-in browser. Job Sourcer discovers the toolkit's
@@ -323,11 +327,12 @@ missed calls and voicemails arrive through email notifications (Google Voice or 
 | Check schedule, share availability, book, detect conflicts | `agents/scheduler.py`, `scheduling.py`, executor re-check |
 | Answer technology / years questions from the markdown CV via a subagent | `servers/cv.py`, `cvparse.py`, `agents/cv_analyst.py` |
 | Always push toward landing the position | drafter objective, reviewer job-advancement score, follow-ups |
-| Keep a log of every opportunity | `pipeline.py`, Pipeline tab, Notion mirror |
+| Keep a log of every opportunity | `pipeline.py`, Pipeline tab |
 | Update me on upcoming events | Upcoming meetings, meeting reminders (`notify.py`) |
 | Draft-and-approve; decide everything, then execute in one batch | `decisions.py` (staged), `executor.run_batch` ("go") |
 | "Don't ask again" for this type of decision/question | `decisions.dont_ask_again`, `rules.py` |
-| Decision Router reads the Notion database and the decision log | `agents/router.py`, `pipeline.notion_pull`, calibration from the ledger |
+| Decision Router reads the pipeline and the decision log | `agents/router.py`, calibration from the ledger |
+| Notion events on my calendar, by scraping (no API), with logs | `notion_sync.py`, `notion_scrape.py`, `servers/calendar.py` (`sync_external_event`), `data/logs/notion-sync.log` |
 | Learn from every recorded decision, become more confident over time | `ledger.py`, `agents/learner.py`, `agents/fewshot.py`, preferences |
 | Only paid tool: Claude or Grok; harness self-built | `llm/`, everything else local |
 
@@ -339,9 +344,10 @@ steward/
   orchestrator.py   the walk-away loop      executor.py     the only component that acts
   decisions.py      your decisions          briefing.py     what you see
   ledger.py         hash-chained ledger     rules.py        "don't ask again" predicates
-  pipeline.py       opportunities + Notion  notify.py       attention budgeting
+  pipeline.py       opportunities           notify.py       attention budgeting
+  notion_sync.py    Notion -> calendar      notion_scrape.py  what is read in the signed-in Notion page
   agents/           classifier, cv_analyst, scheduler, drafter (+reviewer), router, learner, fewshot, prompts
-  servers/          MCP servers: mail, calendar, cv, linkedin, notion
+  servers/          MCP servers: mail, calendar, cv, linkedin
   llm/              anthropic (Claude), grok, offline heuristics, JSON schemas
 tests/              unit + end-to-end tests (real MCP subprocesses, sandbox backends)
 ```
@@ -359,7 +365,10 @@ Run the tests:
   subscription provider with a fake `claude`), and in the dashboard itself. The subscription path
   (`provider: claude-code`) was also run for real on a Claude Pro plan: triage, draft, and review of a sandbox
   message. The API-key path's request format was verified against the SDK with a mock transport only.
-- The IMAP/SMTP, Google Calendar, Notion, and LinkedIn-upstream backends are written against those services'
+- The Notion sync was run for real against a live Notion account (3 workspaces, headless Edge, sign-in window
+  on first use) into the sandbox calendar. Its Google Calendar write path (`sync_external_event`) is written
+  against the documented API but not yet exercised live.
+- The IMAP/SMTP, Google Calendar, and LinkedIn-upstream backends are written against those services'
   documented APIs but have not been exercised against live accounts yet. Run `steward doctor` first, and start with
   everything on "Ask me" (the default) until you trust the drafts.
 - The WhatsApp upstream adapter is built against whatsapp-mcp-ts's tools (`list_chats`, `list_messages`,
