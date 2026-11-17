@@ -8,7 +8,7 @@ Your workspace already exists at `workspace/`:
 - `workspace/.env` holds secrets. You will normally fill it from the dashboard, never by hand.
 
 Everything below is done **once**, from the dashboard's **Setup** tab. No terminal is needed except for the
-LinkedIn command in step 6, the WhatsApp command in step 7, and the Playwright install command in step 8.
+LinkedIn command in step 6 and the WhatsApp command in step 7. (Step 8, Notion, needs Node.js installed.)
 
 ## 0. Open Job Sourcer
 
@@ -28,7 +28,7 @@ window. Go to the **Setup** tab. Each step shows *Ready*, *Needs you*, or *Optio
 | 4 | Google Calendar OAuth client (a JSON file) + one click to connect | console.cloud.google.com | free | yes |
 | 5 | linkedin-toolkit Chrome extension + pairing | your Chrome | free | for LinkedIn |
 | 5b | Scan one QR code with WhatsApp (`steward whatsapp-link`) | your phone | free | for WhatsApp |
-| 6 | Notion: install Playwright once, then sign in to Notion once in the Edge window Job Sourcer opens | notion.so | free | optional |
+| 6 | Notion: install Node.js once (runs the Playwright MCP server), then sign in to Notion once in the Edge window Job Sourcer opens | notion.so | free | optional |
 | 7 | ntfy topic or Telegram bot | ntfy.sh / Telegram | free | optional |
 | 8 | A phone number that emails you voicemails (Google Voice or carrier voicemail-to-email) | voice.google.com / your carrier | free | for calls |
 
@@ -239,29 +239,27 @@ account being restricted, so keep the caps low.
 ## 8. Notion events → your calendar (optional, Setup → step 8)
 
 Job Sourcer reads Notion the way you do: through a **browser signed in to your Notion account**. It does not use a
-Notion integration, an API token, or Notion's public API. [Playwright](https://playwright.dev/python/) drives
-your installed **Microsoft Edge** with its own separate profile, opens the Notion web app (`app.notion.com`)
-**headless** (no window, nothing on your screen), visits **every workspace** your account belongs to, collects the
-dated items in your databases, and adds the ones that are not on your calendar yet to the Google Calendar from
-step 4.
+Notion integration, an API token, or Notion's public API. Job Sourcer starts the
+[Playwright MCP server](https://github.com/microsoft/playwright-mcp) (`@playwright/mcp`) and drives it as an MCP
+client. The server runs your installed **Microsoft Edge** with its own separate profile, **headless** (no window,
+nothing on your screen), on the Notion web app (`app.notion.com`). Job Sourcer visits **every workspace** your
+account belongs to, collects the dated items in your databases, and adds the ones that are not on your calendar
+yet to the Google Calendar from step 4.
 
-**One-time install** (in a terminal, from the project folder):
-
-```powershell
-.venv\Scripts\pip install -e ".[notion]"
-```
-
-That installs Playwright for Python. No browser download is needed: Job Sourcer uses the Edge already on this
-computer. (To use Chrome instead, pick *chrome* as the browser in Setup step 8. *chromium* means Playwright's own
-browser, which needs `.venv\Scripts\python -m playwright install chromium` and may be blocked by company policy.)
+**One-time install:** [Node.js](https://nodejs.org) (LTS), which runs the Playwright MCP server. The first sync
+fetches the server with `npx` (pinned to `@playwright/mcp@0.0.84`, `notion.playwright_mcp` in `steward.yaml`); later
+syncs reuse it. No browser download is needed: the server uses the Edge already on this computer. (To use Chrome
+instead, pick *chrome* as the browser in Setup step 8. *chromium* means Playwright's own browser, which needs
+`npx playwright install chromium` and may be blocked by company policy.)
 
 **Turn it on and sign in once:**
 
 1. In Setup step 8, switch on **Sync Notion events to my calendar** and press **Save**.
 2. Press **Sync now**. Job Sourcer checks whether its saved Notion session is still signed in:
-   - **Not signed in** (always true the first time): an Edge window opens on the Notion login page. Sign in as
-     you usually do (email code, Google, or Apple; complete any two-step check). As soon as Notion lets you in,
-     Job Sourcer saves the session and **closes the window by itself**. You do not need to do anything else.
+   - **Not signed in** (always true the first time): Job Sourcer starts a second Playwright MCP server, this time
+     with a visible Edge window on the Notion login page. Sign in as you usually do (email code, Google, or Apple;
+     complete any two-step check). As soon as Notion lets you in, the session is kept in the profile and **the
+     window closes by itself**; the sync then carries on headless. You do not need to do anything else.
    - **Already signed in**: no window opens. The sync runs in the background.
 3. Setup step 8 shows *Ready*, the time of the last sync, and its result.
 
@@ -295,8 +293,9 @@ even while the login window waits.
   decide.
 - Job Sourcer only **reads** Notion. It never edits, creates, or deletes anything there.
 
-**Schedule:** every 15 minutes (`notion.poll_minutes` in `steward.yaml`), plus **Sync now** whenever you want. From a
-terminal: `steward notion-sync` runs one sync now and `steward notion-log` shows the end of the log.
+**Schedule:** every 15 minutes (`notion.poll_minutes` in `steward.yaml`), plus **Sync now** whenever you want. An
+item you add to any of your Notion workspaces is on your calendar after the next run. From a terminal:
+`steward notion-sync` runs one sync now and `steward notion-log` shows the end of the log.
 
 ### Notion sync logs
 
@@ -304,25 +303,30 @@ Every run writes to **`workspace/data/logs/notion-sync.log`** (one line per step
 **View sync log** in Setup step 8 to read it in the dashboard (results in color). Each run starts with `START` and
 ends with exactly one result line:
 
-- `SYNC OK`: the scrape and the calendar update succeeded, with the counts of workspaces, events found, added,
-  updated, and unchanged.
-- `SYNC FAILED`: with the reason (for example Edge could not start, Notion did not answer, or Google Calendar
-  refused every change). Events already added stay; the next run retries the rest without duplicates.
+- `SYNC OK   Notion sync through Playwright MCP succeeded: ...`: the scrape and the calendar update succeeded, with
+  the counts of workspaces, events found, added, updated, and unchanged.
+- `SYNC FAILED Notion sync through Playwright MCP failed: ...`: with the reason (for example Node.js or Edge could
+  not start, Notion did not answer, or Google Calendar refused every change). Events already added stay; the next
+  run retries the rest without duplicates.
 - `NEEDS LOGIN`: the session was signed out and nobody signed in within 15 minutes.
 
-Every event the sync puts on your calendar gets its own `ADDED` line (title, date and time, workspace / database,
-and the Notion link). Other lines: `WORKSPACE` (one per workspace read), `UPDATED` (an event changed in Notion),
-`LOGIN` (the login window opened, or you signed in and it closed), `SKIPPED` (you deleted that event from your
-calendar), `GONE` (an item left Notion; its event was kept), `NOTE`, and `ERROR` (one item could not be put on the
-calendar). A real example:
+Every event the sync puts on your calendar gets its own `ADDED     new event on your calendar: ...` line (title,
+date and time, workspace / database, and the Notion link). Other lines: `BROWSER` (the Playwright MCP server
+started, headless, and the saved session was accepted), `WORKSPACE` (one per workspace read), `UPDATED` (an event
+changed in Notion), `LOGIN` (the login window opened, or you signed in and it closed), `SKIPPED` (you deleted that
+event from your calendar), `GONE` (an item left Notion; its event was kept), `NOTE`, and `ERROR` (one item could
+not be put on the calendar). The Playwright MCP server's own messages go to `workspace/data/logs/mcp-playwright.log`.
+An example:
 
 ```text
-2026-11-16 22:17:12 START     notion sync (command line; headless; saved session: yes)
-2026-11-16 22:17:22 WORKSPACE William Wilson's Space: 4 page(s), 1 database(s) with dates, 0 dated item(s) in range
-2026-11-16 22:17:22 WORKSPACE bmondragonbrozon's Space: 3 page(s), 1 database(s) with dates, 0 dated item(s) in range
-2026-11-16 22:17:22 WORKSPACE JOB2US: 5 page(s), 2 database(s) with dates, 1 dated item(s) in range
-2026-11-16 22:17:23 ADDED     "Your virtual screen at Marriott International" 2026-11-16 10:30-11:00 (America/New_York) [JOB2US / Interviews] https://app.notion.com/415be3ba...
-2026-11-16 22:17:23 SYNC OK   3 workspace(s), 1 event(s) found, 1 added, 0 updated, 0 unchanged (11.1 s)
+2026-11-17 08:10:02 START     notion sync (scheduled) through the Playwright MCP server; saved session: yes
+2026-11-17 08:10:05 BROWSER   Playwright MCP server started (@playwright/mcp@0.0.84, msedge, headless); no window is shown
+2026-11-17 08:10:07 BROWSER   signed in to Notion (saved session); reading your workspaces in the background
+2026-11-17 08:10:38 WORKSPACE William Wilson's Space: 4 page(s), 1 database(s) with dates, 0 dated item(s) in range
+2026-11-17 08:10:38 WORKSPACE bmondragonbrozon's Space: 3 page(s), 1 database(s) with dates, 0 dated item(s) in range
+2026-11-17 08:10:38 WORKSPACE JOB2US: 5 page(s), 2 database(s) with dates, 1 dated item(s) in range
+2026-11-17 08:10:39 ADDED     new event on your calendar: "Intro call" 2026-11-19 10:30-11:00 (America/New_York) [JOB2US / Interviews] https://app.notion.com/415be3ba...
+2026-11-17 08:10:39 SYNC OK   Notion sync through Playwright MCP succeeded: 3 workspace(s), 1 event(s) found, 1 added, 0 updated, 0 unchanged (37.2 s)
 ```
 
 When a sync adds events you also get a toast in the dashboard, a desktop alert if you turned them on, and a phone
@@ -333,11 +337,14 @@ notification if you set one up in step 9.
 - *Google sign-in says "This browser or app may not be secure".* Google sometimes blocks sign-in inside
   automated browsers. On the Notion login page, choose **Continue with email** and use the login code Notion
   emails you instead.
-- *`SYNC FAILED ... could not start msedge through Playwright`.* Check that Edge is installed, or choose
-  *chrome* as the browser in Setup step 8.
+- *`SYNC FAILED ... could not start the Playwright MCP server`.* Check that Node.js is installed (`npx --version`
+  in a terminal) and that this computer can reach the npm registry the first time. Details are in
+  `workspace/data/logs/mcp-playwright.log`.
+- *`SYNC FAILED ... Playwright MCP browser_navigate failed`.* Check that Edge is installed, or choose *chrome* as the
+  browser in Setup step 8. Close any other Job Sourcer instance that may be syncing with the same profile.
 - *The log shows `SYNC FAILED` repeatedly.* Notion may have changed its web app. Press **Sync now** once to retry,
   and keep the log for troubleshooting.
-- *Step 7 says Playwright is not installed.* Run the install command above, then restart Job Sourcer.
+- *Step 8 says Node.js is not installed.* Install it from nodejs.org, then restart Job Sourcer.
 
 ## 9. Notifications (Setup → step 9)
 

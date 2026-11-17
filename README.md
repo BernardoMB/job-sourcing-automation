@@ -237,13 +237,14 @@ the project folder; otherwise pass `-c path/to/steward.yaml`.
    LinkedIn's (`hourly_cap`, `daily_cap`, `business_hours`, `min/max_delay_seconds`). The upstream is started for
    each check and given `settle_seconds` (20) to receive what arrived while it was offline. Sandbox:
    `steward sandbox-whatsapp --name "..." --text "..."`.
-8. **Notion events → calendar** (optional, `notion:`): scraped, not through an API. `pip install -e ".[notion]"`,
-   then `notion.enabled: true`. Playwright drives your installed Edge (`notion.browser`) with its own profile in
-   `secrets/notion-browser/`, headless. Only when that profile is not signed in does an Edge window open on the
-   Notion login page; you sign in, the window closes, and the session is kept. Every `notion.poll_minutes` it reads
+8. **Notion events → calendar** (optional, `notion:`): scraped, not through an API. Needs Node.js, then
+   `notion.enabled: true`. Job Sourcer starts the Playwright MCP server (`notion.playwright_mcp`, `npx
+   @playwright/mcp`) and drives your installed Edge (`notion.browser`) through it, with its own profile in
+   `secrets/notion-browser/`, headless. Only when that profile is not signed in does a second server open an Edge
+   window on the Notion login page; you sign in, the window closes, and the session is kept. Every `notion.poll_minutes` it reads
    every workspace and every database with a date property, and puts items dated within `notion.lookahead_days` on
    your calendar (no attendees, never twice, updated when they change in Notion). Every run is logged to
-   `data/logs/notion-sync.log` (`START`, `WORKSPACE`, `ADDED`/`UPDATED` per event, and `SYNC OK` / `SYNC FAILED` /
+   `data/logs/notion-sync.log` (`START`, `BROWSER`, `WORKSPACE`, `ADDED`/`UPDATED` per event, and `SYNC OK` / `SYNC FAILED` /
    `NEEDS LOGIN`); `steward notion-sync` runs one now and `steward notion-log` shows the log. SETUP.md step 8.
 9. **Notifications** (optional, `notifications:`): `ntfy` (self-hostable push to your phone) and/or Telegram; quiet
    hours, a minimum number of pending decisions, cooldown, and reminders before job meetings.
@@ -298,7 +299,7 @@ recruiter goes quiet for `autonomy.follow_up_after_days` (5) days.
 ## FAQ
 
 **Is Notion real?** Yes, and it uses no Notion API token. `steward/notion_sync.py` drives your installed Edge
-through Playwright, signed in to your own Notion account, and reads the same records the Notion web app
+through the Playwright MCP server, signed in to your own Notion account, and reads the same records the Notion web app
 (app.notion.com) loads for you (`steward/notion_scrape.py`). It puts your dated Notion items on your calendar. It is
 **optional and off by default** (SETUP.md step 8). Your job pipeline is stored locally in SQLite (the Pipeline tab).
 
@@ -308,6 +309,8 @@ credentials, whenever it needs it. The exception is LinkedIn: Job Sourcer's Link
 front of the open-source **linkedin-toolkit** (Chrome extension + local server, run with `npx linkedin-toolkit-mcp`),
 because the only safe way to use LinkedIn is through your own logged-in browser. Job Sourcer discovers the toolkit's
 tool names by itself (`steward/linkedin_adapt.py`); `linkedin.upstream.tools` in steward.yaml can override them.
+The optional Notion sync uses Microsoft's **Playwright MCP server**, which `npx` fetches and starts by itself on the
+first sync (only Node.js has to be installed).
 
 **Is it constantly watching?** Yes, whenever Job Sourcer is running (`Start Job Sourcer.cmd`, start-at-login, or `steward
 serve`). It wakes every 30 s (`dashboard.tick_seconds`); each source has its own interval (`mail.poll_minutes: 1`,

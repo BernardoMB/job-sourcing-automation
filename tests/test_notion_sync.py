@@ -58,7 +58,9 @@ def test_sync_adds_events_once_and_logs_them(steward):
     text = _log(steward)
     assert "START" in text and "WORKSPACE Acme Team: 1 database(s) with dates, 1 dated item(s)" in text
     assert text.count("ADDED") == 2 and '"Design review"' in text and "[Acme Team / Meetings]" in text
-    assert "SYNC OK   2 workspace(s), 2 event(s) found, 2 added, 0 updated, 0 unchanged" in text
+    assert ("SYNC OK   Notion sync through Playwright MCP succeeded: 2 workspace(s), 2 event(s) found, 2 added, "
+            "0 updated, 0 unchanged") in text
+    assert 'ADDED     new event on your calendar: "Design review"' in text
 
     # A second run never duplicates.
     res = _sync(steward, lambda: _result(items))
@@ -109,7 +111,8 @@ def test_needs_login_and_failures_are_logged(steward):
 
     res = _sync(steward, broken)
     assert res["status"] == "failed"
-    assert "SYNC FAILED scraping Notion failed: RuntimeError: Notion did not load" in _log(steward)
+    assert ("SYNC FAILED Notion sync through Playwright MCP failed: could not read Notion: RuntimeError: "
+            "Notion did not load") in _log(steward)
     assert notion_sync.last_status(steward.cfg, steward.db)["status"] == "failed"
 
 
@@ -165,7 +168,7 @@ class FakeNotion:
             "row-nodate": {"id": "row-nodate", "alive": True, "properties": {"title": [["No date"]]}},
         }
 
-    def api(self, page, endpoint, body, user_id="", space_id=""):
+    async def api(self, page, endpoint, body, user_id="", space_id=""):
         wrap = lambda d: {k: {"value": {"value": v, "role": "editor"}} for k, v in d.items()}  # noqa: E731
         if endpoint == "getSpaces":
             return {"u1": {"space": wrap({"s1": {"id": "s1", "name": "JOB2US"}}),
@@ -199,7 +202,7 @@ class FakeNotion:
 
 def test_collect_walks_workspaces_and_reads_dated_rows():
     result = ScrapeResult()
-    notion_scrape.collect(FakeNotion(), None, result, 60, False, "America/Mexico_City")
+    run(notion_scrape.collect(FakeNotion(), None, result, 60, False, "America/Mexico_City"))
     assert [w["name"] for w in result.workspaces] == ["JOB2US"]
     assert result.workspaces[0]["databases"] == 1 and result.workspaces[0]["pages"] == 2
     assert [(i.title, i.database, i.all_day) for i in result.items] == [("Interview with Acme", "Interviews", False)]
@@ -250,4 +253,102 @@ def test_setup_step_reports_notion(steward):
     steward.cfg.notion.enabled = True
     _sync(steward, lambda: _result(_items()))
     check = setup_mod.notion_check(steward.cfg)
-    assert check["status"] in ("ok", "todo")  # todo only when Playwright is not installed
+    assert check["status"] in ("ok", "todo")  # todo only when Node.js (npx) is not installed
+
+
+# -- the Playwright MCP browser ----------------------------------------------------------
+def test_parse_browser_evaluate_result():
+    text = ('### Result\n{\n  "status": 200,\n  "data": {"a": "x\\n### not a section"}\n}\n'
+            "### Ran Playwright code\n```js\nawait page.evaluate('...');\n```\n### Page\n- Page URL: https://app.notion.com/")
+    assert notion_sync.parse_result(text) == {"status": 200, "data": {"a": "x\n### not a section"}}
+    assert notion_sync.parse_result("### Result\n\"about:blank\"") == "about:blank"
+    assert notion_sync.parse_result("### Result\nundefined\n### Ran Playwright code") is None
+
+
+def test_playwright_mcp_server_config(steward):
+    import json
+
+    mcp = notion_sync.PlaywrightMCP(steward.cfg, headless=True)
+    conf = json.loads(mcp._config_file().read_text(encoding="utf-8"))["browser"]
+    assert conf["launchOptions"]["headless"] is True and conf["launchOptions"]["channel"] == "msedge"
+    assert conf["userDataDir"] == str(notion_sync.profile_path(steward.cfg))
+    login = json.loads(notion_sync.PlaywrightMCP(steward.cfg, headless=False)._config_file()
+                       .read_text(encoding="utf-8"))["browser"]
+    assert login["launchOptions"]["headless"] is False and login["userDataDir"] == conf["userDataDir"]
+    assert "@playwright/mcp@" in mcp.describe() and "headless" in mcp.describe()
+
+
+class FakePlaywrightMCP:
+    """Stands in for the Playwright MCP server: records each start, headless or visible."""
+
+    starts: list[bool] = []
+    signed_in_profile = True
+    login_succeeds = True
+
+    def __init__(self, cfg, headless):
+        self.headless = headless
+
+    def describe(self):
+        return f"@playwright/mcp@test, msedge, {'headless' if self.headless else 'visible window'}"
+
+    async def __aenter__(self):
+        FakePlaywrightMCP.starts.append(self.headless)
+        return self
+
+    async def __aexit__(self, *exc):
+        return None
+
+    async def navigate(self, url):
+        self.url = url
+
+    async def signed_in(self):
+        if not self.headless and FakePlaywrightMCP.login_succeeds:
+            FakePlaywrightMCP.signed_in_profile = True  # you signed in in the window
+        if not self.headless and not FakePlaywrightMCP.login_succeeds:
+            return False, "about:blank"  # you closed the window
+        return FakePlaywrightMCP.signed_in_profile, "https://app.notion.com/robots.txt"
+
+    async def api(self, page, endpoint, body, user_id="", space_id=""):
+        return await FakeNotion().api(page, endpoint, body, user_id, space_id)
+
+
+def _scrape(steward, monkeypatch, *, signed_in, login_succeeds=True, interactive=True):
+    async def no_wait(_):
+        return None
+
+    monkeypatch.setattr(notion_sync, "PlaywrightMCP", FakePlaywrightMCP)
+    monkeypatch.setattr(notion_sync.asyncio, "sleep", no_wait)
+    FakePlaywrightMCP.starts = []
+    FakePlaywrightMCP.signed_in_profile = signed_in
+    FakePlaywrightMCP.login_succeeds = login_succeeds
+    browser = notion_sync.NotionBrowser(steward.cfg, notion_sync.SyncLog(notion_sync.log_path(steward.cfg)))
+    return run(browser.scrape(interactive, 60, False))
+
+
+def test_signed_in_runs_headless_only(steward, monkeypatch):
+    res = _scrape(steward, monkeypatch, signed_in=True)
+    assert FakePlaywrightMCP.starts == [True]  # one headless server; no window ever opened
+    assert [i.title for i in res.items] == ["Interview with Acme"] and not res.logged_in_now
+    text = _log(steward)
+    assert "BROWSER   Playwright MCP server started (@playwright/mcp@test, msedge, headless); no window is shown" in text
+    assert "LOGIN" not in text
+
+
+def test_signed_out_opens_login_window_then_continues_headless(steward, monkeypatch):
+    res = _scrape(steward, monkeypatch, signed_in=False)
+    assert FakePlaywrightMCP.starts == [True, False, True]  # check headless, sign-in window, back to headless
+    assert res.logged_in_now and len(res.items) == 1
+    text = _log(steward)
+    assert "LOGIN     not signed in to Notion: opening a browser window (Playwright MCP)" in text
+    assert "LOGIN     signed in; session saved in the browser profile; window closed" in text
+
+
+def test_signed_out_without_login_window(steward, monkeypatch):
+    import pytest
+
+    with pytest.raises(NeedsLogin, match="signed out"):
+        _scrape(steward, monkeypatch, signed_in=False, interactive=False)
+    assert FakePlaywrightMCP.starts == [True]
+    with pytest.raises(NeedsLogin, match="window was closed"):
+        _scrape(steward, monkeypatch, signed_in=False, login_succeeds=False)
+    assert FakePlaywrightMCP.starts == [True, False]

@@ -176,7 +176,8 @@ class WhatsAppConfig(BaseModel):
 
 
 class NotionConfig(BaseModel):
-    """Notion events -> your calendar, read by a browser signed in to your own Notion account (no API token)."""
+    """Notion events -> your calendar, read through the Playwright MCP server in a browser signed in to your own
+    Notion account (no API token)."""
 
     enabled: bool = False
     poll_minutes: int = 15
@@ -185,7 +186,10 @@ class NotionConfig(BaseModel):
     # False: every database with a date property (the one named like Date/Time/When, else the first).
     # True: only databases you view as a calendar or timeline in Notion (the property that view uses).
     only_calendar_views: bool = False
-    # The installed browser Playwright drives: msedge or chrome (installed), or chromium (Playwright's own).
+    # The Playwright MCP server Job Sourcer starts to drive the browser (needs Node.js; npx fetches it once).
+    playwright_mcp: ServerSpec = Field(default_factory=lambda: ServerSpec(
+        command="npx", args=["-y", "@playwright/mcp@0.0.84"]))
+    # The installed browser it drives: msedge or chrome (installed), or chromium (Playwright's own).
     browser: Literal["msedge", "chrome", "chromium"] = "msedge"
     # The browser profile that keeps your Notion sign-in (cookies). Never leaves this computer.
     profile_dir: str = "secrets/notion-browser"

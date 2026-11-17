@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import re
+import shutil
 import sys
 from pathlib import Path
 from typing import Any
@@ -270,11 +271,13 @@ def notion_check(cfg: Config) -> dict[str, Any]:
     n = cfg.notion
     if not n.enabled:
         return _step("notion", title, "off",
-                     "Optional. Reads Notion through a browser signed in to your account (no API token).",
+                     "Optional. Reads Notion through the Playwright MCP server, in a browser signed in to your "
+                     "account (no API token).",
                      "Switch on 'Sync Notion events to my calendar' below, Save, then press Sync now.")
-    if importlib.util.find_spec("playwright") is None:
-        return _step("notion", title, "todo", "Playwright is not installed",
-                     'Run once in the project folder:  .venv\\Scripts\\pip install -e ".[notion]"')
+    if shutil.which(n.playwright_mcp.command) is None:
+        return _step("notion", title, "todo",
+                     f"Node.js is not installed ('{n.playwright_mcp.command}' not found); it runs the Playwright MCP server",
+                     "Install Node.js (LTS) from nodejs.org, then restart Job Sourcer.")
     last: dict[str, Any] = {}
     if cfg.db_path.exists():
         db = Database(cfg.db_path)
