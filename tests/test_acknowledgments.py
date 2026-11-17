@@ -86,3 +86,11 @@ def test_acknowledgments_that_only_describe_later_steps_are_still_filed():
         assert is_application_ack({"subject": subject, "body_text": body}), subject
     for subject, body in kept.items():
         assert not is_application_ack({"subject": subject, "body_text": body}), subject
+
+
+def test_an_add_to_calendar_email_is_never_filed_as_an_acknowledgment():
+    from steward.acknowledgments import is_application_ack
+    msg = {"subject": "Thank you for applying", "body_text": "We received your application. Add to Calendar",
+           "add_to_calendar": True, "invites": []}
+    assert not is_application_ack(msg)
+    assert is_application_ack({**msg, "add_to_calendar": False})

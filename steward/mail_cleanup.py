@@ -92,7 +92,15 @@ def related_emails(db, event: dict[str, Any], handled_at: str) -> list[dict[str,
         out.append(event)
     # An email whose task (an assessment, a form, a video interview) is still open still needs you.
     open_tasks = {r["event_id"] for r in db.query("SELECT event_id FROM tasks WHERE status IN ('open', 'suggested')")}
-    return [e for e in out if (loads(e["raw_json"], {}) or {}).get("uid") is not None and e["id"] not in open_tasks]
+    return [e for e in out if (loads(e["raw_json"], {}) or {}).get("uid") is not None and e["id"] not in open_tasks
+            and not _unread_invitation(e)]
+
+
+def _unread_invitation(e: dict[str, Any]) -> bool:
+    """An invitation email not processed yet: its meeting is not on your calendar, so it is never filed."""
+    raw = loads(e["raw_json"], {}) or {}
+    return e.get("status") == "new" and bool(raw.get("invites") or raw.get("add_to_calendar")
+                                              or raw.get("has_calendar_invite"))
 
 
 async def sweep(st, hub: MCPHub) -> int:

@@ -135,3 +135,38 @@ def find_slots(busy: list[dict[str, Any]], window_start: datetime, window_end: d
                 chosen.append(f)
     chosen.sort()
     return [{"start": c.isoformat(), "end": (c + duration).isoformat()} for c in chosen[:max_slots]]
+
+
+def free_windows(busy: list[dict[str, Any]], window_start: datetime, window_end: datetime, *, min_minutes: int,
+                 tz_name: str, working_days: list[int], work_start: str, work_end: str, buffer_minutes: int,
+                 min_notice_hours: int, avoid: list[str], now: datetime) -> list[dict[str, str]]:
+    """Every free stretch inside working hours, day by day: busy time (with its buffer) and blocked windows cut out.
+
+    Stretches shorter than min_minutes are left out; starts are rounded up to the half hour."""
+    zone = tz(tz_name)
+    earliest = max(window_start, now + timedelta(hours=min_notice_hours))
+    pad = timedelta(minutes=buffer_minutes)
+    taken = [(bs - pad, be + pad) for bs, be in ((parse_iso(b["start"]), parse_iso(b["end"])) for b in busy)
+             if bs is not None and be is not None]
+    ws, we = parse_hhmm(work_start), parse_hhmm(work_end)
+    out: list[dict[str, str]] = []
+    day = earliest.astimezone(zone).date()
+    while day <= window_end.astimezone(zone).date():
+        if day.weekday() in working_days:
+            blocks = list(taken)
+            for spec in avoid:
+                parsed = parse_avoid(spec)
+                if parsed and parsed[0] in (None, day.weekday()):
+                    blocks.append((datetime.combine(day, parsed[1], tzinfo=zone), datetime.combine(day, parsed[2], tzinfo=zone)))
+            start = max(datetime.combine(day, ws, tzinfo=zone), earliest.astimezone(zone))
+            if start.minute % 30 or start.second or start.microsecond:
+                start = start.replace(minute=start.minute // 30 * 30, second=0, microsecond=0) + timedelta(minutes=30)
+            end_of_day = datetime.combine(day, we, tzinfo=zone)  # whole days, up to the last one
+            for bs, be in sorted(b for b in blocks if b[1] > start and b[0] < end_of_day):
+                if bs > start and bs - start >= timedelta(minutes=min_minutes):
+                    out.append({"start": start.isoformat(), "end": bs.isoformat()})
+                start = max(start, be)
+            if end_of_day - start >= timedelta(minutes=min_minutes):
+                out.append({"start": start.isoformat(), "end": end_of_day.isoformat()})
+        day += timedelta(days=1)
+    return out

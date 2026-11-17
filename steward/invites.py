@@ -205,7 +205,9 @@ def parse_ics(text: str, default_tz: str = "UTC") -> list[dict[str, Any]]:
             if stack:
                 stack.pop()
             continue
-        if ev is not None and stack and stack[-1] == "VEVENT" and name not in ev["values"]:
+        if ev is not None and stack and stack[-1] == "VEVENT" and name == "EXDATE":
+            ev.setdefault("exdates", []).extend((v, params) for v in value.split(","))
+        elif ev is not None and stack and stack[-1] == "VEVENT" and name not in ev["values"]:
             ev["values"][name], ev["params"][name] = value, params
     return out
 
@@ -220,12 +222,21 @@ def _event(ev: dict[str, Any], method: str, customs: dict[str, _Custom], default
         end = start + (_duration(v.get("DURATION", "")) or timedelta(minutes=30))
     organizer = re.sub(r"(?i)^mailto:", "", v.get("ORGANIZER", "")).strip()
     cancelled = method == "CANCEL" or v.get("STATUS", "").upper() == "CANCELLED"
+    recurrence_id = _when(v.get("RECURRENCE-ID", ""), p.get("RECURRENCE-ID", {}), customs, default_tz) \
+        if v.get("RECURRENCE-ID") else None
+    exdates = [d for d in (_when(x, xp, customs, default_tz) for x, xp in ev.get("exdates", [])) if d]
     return {
         "uid": v.get("UID", "").strip(), "title": _text(v.get("SUMMARY", "")) or "Meeting",
         "start": to_iso(start), "end": to_iso(end), "location": _text(v.get("LOCATION", "")),
         "description": _text(v.get("DESCRIPTION", ""))[:2000], "organizer_email": organizer.lower(),
         "organizer_name": p.get("ORGANIZER", {}).get("CN", ""), "method": "cancel" if cancelled else "request",
         "source": "ics",
+        # Repeating meetings (a whole calendar, not a single invitation): expanded by steward.recurrence.
+        "rrule": v.get("RRULE", "").strip(), "exdates": [to_iso(d) for d in exdates],
+        "recurrence_id": to_iso(recurrence_id) if recurrence_id else "",
+        "tzid": p.get("DTSTART", {}).get("TZID", ""),
+        "show_as": v.get("X-MICROSOFT-CDO-BUSYSTATUS", "").upper() or ("FREE" if v.get("TRANSP", "").upper()
+                                                                         == "TRANSPARENT" else "BUSY"),
     }
 
 

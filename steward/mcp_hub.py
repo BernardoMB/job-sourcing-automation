@@ -31,6 +31,7 @@ BUILTIN_MODULES = {
     "linkedin": "steward.servers.linkedin",
     "whatsapp": "steward.servers.whatsapp",
     "notion": "steward.servers.notion",
+    "workcal": "steward.servers.workcal",
 }
 
 # Outward-facing tools: executor only.
@@ -39,6 +40,8 @@ EXECUTOR_ONLY = {
     ("calendar", "create_event"),
     ("calendar", "rsvp_event"),
     ("calendar", "add_invite"),
+    ("calendar", "sync_copy"),
+    ("calendar", "remove_copy"),
     ("mail", "file_message"),
     ("mail", "trash_message"),
     ("linkedin", "toolkit_queue_decide"),
@@ -86,6 +89,7 @@ class MCPHub:
             "linkedin": c.linkedin.backend != "disabled",
             "whatsapp": c.whatsapp.backend != "disabled",
             "notion": c.notion.enabled,
+            "workcal": c.work_calendar.enabled,
             "cv": True,
         }.get(name, False)
 
@@ -98,7 +102,9 @@ class MCPHub:
         if name == "mail":
             keys.append(self.cfg.mail.password_env)
         elif name == "notion":
-            keys.append(self.cfg.notion.token_env)
+            keys += [self.cfg.notion.token_env, *self.cfg.notion.extra_token_envs]
+        elif name == "workcal":
+            keys.append(self.cfg.work_calendar.ics_url_env)
         elif name == "linkedin" and self.cfg.linkedin.upstream and self.cfg.linkedin.upstream.token_env:
             keys.append(self.cfg.linkedin.upstream.token_env)
         return {k: os.environ[k] for k in keys if k in os.environ}

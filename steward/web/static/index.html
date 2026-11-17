@@ -165,6 +165,9 @@ tr.detail td { background: var(--bg); }
 .steer, .teach { margin-top: 10px; }
 .steer label, .teach label { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 4px; }
 .steer textarea, .teach textarea { width: 100%; min-height: 54px; resize: vertical; }
+.review { margin-top: 10px; display: grid; gap: 6px; }
+.reviewlist { margin: 4px 0 0; padding-left: 18px; display: grid; gap: 4px; }
+.howto { margin: 6px 0; padding-left: 20px; display: grid; gap: 3px; }
 .revbar { margin-top: 8px; }
 .revbar .track { height: 6px; border-radius: 3px; background: var(--accent-soft); overflow: hidden; }
 .revbar .fill { height: 100%; width: 0; background: var(--accent); border-radius: 3px; transition: width .4s ease; }
@@ -234,6 +237,7 @@ let tab = "brief";
 let dirty = false;           // the user is editing a draft: don't re-render under them
 let freshIds = new Set();    // items that arrived since the page last rendered
 let knownIds = null;
+let review = { running: false, result: null };  // the last "Follow up on quiet positions" run
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const pct = (x) => (x ?? 0).toFixed(2);
@@ -750,6 +754,27 @@ function renderBrief() {
   const clr = $("#bclear"); if (clr) clr.addEventListener("click", () => { BF.q = ""; BF.channel = ""; BF.category = ""; store.set("briefFilters", BF); renderBrief(); });
   setTimeout(() => freshIds.clear(), 15000);
 }
+function reviewCard() {
+  const r = review.result;
+  const list = (xs, f) => xs.length ? `<ul class="reviewlist">${xs.map(f).join("")}</ul>` : "";
+  const res = !r ? "" : `<div class="meta"><b>${r.drafted.length}</b> follow-up${r.drafted.length === 1 ? "" : "s"} added to your briefing for your decision.</div>
+    ${list(r.drafted, x => `<li>✉️ ${esc(x.position)}</li>`)}
+    ${r.skipped.length ? `<details><summary class="meta">${r.skipped.length} position${r.skipped.length === 1 ? "" : "s"} left alone</summary>${list(r.skipped, x => `<li><b>${esc(x.position)}</b><div class="meta">${esc(x.reason)}</div></li>`)}</details>` : ""}`;
+  const days = B.pipeline.stale_days;
+  return `<div class="card review"><div class="row"><button class="btn primary" id="reviewBtn" ${review.running ? "disabled" : ""}>${review.running ? "Reviewing your positions…" : "🔁 Follow up on stale positions"}</button></div>
+    <div class="meta">Checks every position with no contact for ${days} day${days === 1 ? "" : "s"} or more. If it is not closed, you were not turned down, no meeting or invitation for it is on your calendar, and nothing is waiting for you, a message asking the recruiter for an update and whether the position is still open goes to your briefing for your decision.</div>${res}</div>`;
+}
+document.addEventListener("click", async (ev) => {
+  if (!ev.target.closest("#reviewBtn") || review.running) return;
+  review.running = true; renderPipeline();
+  try {
+    review.result = await api("/api/review-positions", "POST", {});
+    review.result.drafted.forEach(x => freshIds.add(x.draft_id));
+    toast(review.result.drafted.length ? `${review.result.drafted.length} follow-up(s) are waiting for your decision.` : "No position needs a follow-up right now.");
+  } catch (e) { toast("Error: " + e.message, 8000); }
+  review.running = false;
+  await refresh(true);
+});
 const findDraft = (id) => [...B.high_priority, ...B.needs_decision, ...B.handled_automatically].find(v => v.id === id);
 document.addEventListener("input", (ev) => { if (ev.target.closest(".action, .dontask, .override, .steer, .teach, .taskform")) dirty = true; });
 document.addEventListener("click", (ev) => {
@@ -1059,6 +1084,7 @@ function renderPipeline() {
   const opts = (cur) => Object.entries(B.stages).map(([k, l]) => `<option value="${k}" ${k === cur ? "selected" : ""}>${esc(l)}</option>`).join("");
   const host = $("#tab-pipeline");
   host.innerHTML = `<div class="pill-row">${Object.entries(B.pipeline.by_stage).map(([s, n]) => `<span class="chip ${n ? "info" : ""}">${esc(B.stages[s])}: ${n}</span>`).join("")}</div>
+    ${reviewCard()}
     <div id="pipeTable"></div>
     <p class="meta">Moving a thread to “Offer” revokes all autonomy for it. Edits here (or in Notion, if enabled) are what the Decision Router reads.</p>`;
   const stageOrder = Object.keys(B.stages);
@@ -1071,6 +1097,7 @@ function renderPipeline() {
       { key: "recruiter_name", label: "Recruiter", filter: "text", render: o => `${esc(o.recruiter_name || "")}<div class="meta">${esc(o.recruiter_email || o.recruiter_linkedin || o.recruiter_phone || "")}</div>` },
       { key: "channel", label: "Channel", filter: "select" },
       { key: "last_contact", label: "Last contact", sortValue: o => -(Date.parse(o.last_inbound_at > o.last_outbound_at ? o.last_inbound_at : o.last_outbound_at) || 0) },
+      { key: "last_action", label: "Last action", filter: "text", sortValue: o => -(Date.parse(o.last_action_at) || 0), render: o => `${esc(o.last_action || "")}<div class="meta">${esc(o.last_action_ago || "")}</div>` },
       { key: "next_action", label: "Next action", filter: "text" },
     ],
     afterDraw: (h) => h.querySelectorAll("select[data-opp]").forEach(s => s.addEventListener("change", () =>
@@ -1220,15 +1247,33 @@ async function renderSetup() {
     ${step(7, "whatsapp", "WhatsApp (your own account)", `<div class="meta">Reads one-to-one chats through whatsapp-mcp-ts, linked to your WhatsApp as a linked device (like WhatsApp Web). Only chats about a job are kept and answered; every other chat is ignored completely. Groups are never read. To install and link it, run <span class="mono">steward whatsapp-link</span> in a terminal once and scan the QR code with WhatsApp (Settings &gt; Linked devices).</div>
       <div class="grid2">${field("whatsapp.backend", "Backend", ["disabled", "upstream", "sandbox"])}${field("whatsapp.business_hours", "Reply hours")}</div>
       <div class="buttons">${save(["whatsapp.backend", "whatsapp.business_hours"])} ${test("whatsapp")}</div>`)}
-    ${step(8, "notion", "Notion pipeline (optional)", `${secret("NOTION_TOKEN")}
+    ${step(8, "notion", "Notion (optional)", `<div class="meta">Job Sourcer reads each workspace through a Notion integration you create (Notion has no sign-in for desktop apps like this one):
+        <ol class="howto"><li>Open <a href="https://www.notion.so/profile/integrations" target="_blank" rel="noopener">notion.so/profile/integrations</a>, press <b>New integration</b>, pick the workspace, type <b>Internal</b>, and save.</li>
+        <li>Copy its <b>Internal Integration Secret</b> and paste it below.</li>
+        <li>In Notion, open each page or database with your events, then <b>⋯ → Connections → add your integration</b>. Sharing a top-level page shares everything under it.</li>
+        <li>Repeat for every workspace you use.</li></ol></div>
+      <div id="notionWs" class="meta">Loading your workspaces…</div>
+      <div class="row"><input type="password" id="notionToken" placeholder="Paste an integration secret (starts with ntn_ or secret_)" style="flex:1" autocomplete="off"><button class="btn small primary" id="notionAdd">Add workspace</button></div>
+      <label class="switch"><input type="checkbox" id="notionCal" ${v["notion.calendar_sync"] ? "checked" : ""}> Put entries with a date and time from my Notion databases on my calendar (every 15 min, and they follow when you move them in Notion)</label>
+      <div class="meta">Job pipeline mirror (optional): ${v["notion.database_id"] ? "set up" : "not set up"}.</div>
       <div class="row"><input type="text" id="notionPage" placeholder="Link to a Notion page shared with your integration" style="flex:1"><button class="btn small" id="notionBtn">Create the pipeline database</button></div>
-      <div class="buttons">${test("notion")}</div>`)}
-    ${step(9, "notifications", "Notifications", `<label class="switch"><input type="checkbox" id="soundOn" ${v["notifications.sound"] ? "checked" : ""}> Play a sound on this computer when new events arrive (a recruiter message, call, invite, or meeting change)</label>
+      <div class="buttons">${v["notion.database_id"] ? test("notion") : ""}</div>`)}
+    ${step(9, "workcal", "Work calendar (Microsoft 365, optional)", `<div class="meta">Copies the meetings on your company calendar onto your Google Calendar every 10 minutes, so your availability is right everywhere. Moved meetings follow; cancelled ones are removed. The meeting body and the attendee list are never copied. Use one of the two ways in below that your company allows; check its policy on copying work calendar details to a personal account.</div>
+      <label class="switch"><input type="checkbox" id="wcOn" ${v["work_calendar.enabled"] ? "checked" : ""}> Mirror my work calendar onto my Google Calendar</label>
+      <div class="grid2">${field("work_calendar.source", "Way in", ["ics", "graph"], "ics = a published calendar link · graph = sign in with Microsoft")}${field("work_calendar.detail", "What a copy shows", ["busy", "title", "full"], "busy: “Busy (work)” only · title: the meeting title · full: title, location, Teams link, organizer")}</div>
+      <div class="buttons">${save(["work_calendar.source", "work_calendar.detail"])}</div>
+      ${v["work_calendar.source"] === "graph" ? `<div class="meta"><b>Sign in with Microsoft.</b> Needs an app registration your company allows: in the Azure portal (Microsoft Entra ID → App registrations → New registration), allow “Accounts in any organizational directory”, under Authentication turn on <b>Allow public client flows</b>, and under API permissions add Microsoft Graph delegated <b>Calendars.Read</b>. If your company blocks apps it has not approved, Microsoft says so when you sign in: ask IT to approve it, or use a calendar link instead.</div>
+        <div class="grid2">${field("work_calendar.graph_client_id", "Application (client) ID")}${field("work_calendar.graph_tenant", "Tenant", "text", "organizations, or your company's domain / tenant ID")}</div>
+        <div class="buttons">${save(["work_calendar.graph_client_id", "work_calendar.graph_tenant"])} <button class="btn small primary" id="msSignIn">Sign in with Microsoft</button></div>
+        <div id="msState" class="meta"></div>`
+      : `<div class="meta"><b>Calendar link.</b> In Outlook on the web: Settings → Calendar → Shared calendars → <b>Publish a calendar</b>, pick your calendar and what it may show, press Publish, then copy the <b>ICS</b> link and paste it here. If Publish is missing, your company has turned it off: use Sign in with Microsoft, or ask IT.</div>${secret("WORK_CALENDAR_ICS_URL")}`}
+      <div class="buttons">${test("workcal")}</div>`)}
+    ${step(10, "notifications", "Notifications", `<label class="switch"><input type="checkbox" id="soundOn" ${v["notifications.sound"] ? "checked" : ""}> Play a sound on this computer when new events arrive (a recruiter message, call, invite, or meeting change)</label>
       <div class="buttons"><button class="btn small" id="soundTest">Play test sound</button><span class="result" id="soundResult"></span></div>
       <div class="meta">Phone notifications (optional):</div>
       <div class="grid2">${field("notifications.ntfy_url", "ntfy topic URL", "text", "e.g. https://ntfy.sh/your-long-random-topic")}${field("notifications.telegram_chat_id", "Telegram chat id")}${field("notifications.quiet_hours", "Quiet hours")}</div>
       ${secret("TELEGRAM_BOT_TOKEN")}<div class="buttons"><button class="btn small primary" id="notifSave">Save</button></div>`)}
-    ${step(10, "autostart", "Start when you log in", `<label class="switch"><input type="checkbox" id="autoStart" ${S.autostart ? "checked" : ""} ${S.autostart_supported ? "" : "disabled"}> Start Job Sourcer automatically at Windows login (keeps watching even if this window is closed)</label>`)}
+    ${step(11, "autostart", "Start when you log in", `<label class="switch"><input type="checkbox" id="autoStart" ${S.autostart ? "checked" : ""} ${S.autostart_supported ? "" : "disabled"}> Start Job Sourcer automatically at Windows login (keeps watching even if this window is closed)</label>`)}
   `;
   host.querySelectorAll("[data-tz]").forEach(a => a.addEventListener("click", (e) => { e.preventDefault(); host.querySelector('[data-k="profile.timezone"]').value = a.dataset.tz; }));
   host.querySelectorAll("[data-save]").forEach(b => b.addEventListener("click", () => {
@@ -1258,6 +1303,39 @@ async function renderSetup() {
   $("#liUse").addEventListener("click", () => act(() => api("/api/setup/config", "POST", { changes: { "linkedin.backend": "upstream",
     "linkedin.upstream": { url: "http://127.0.0.1:47830/mcp", token_env: "LINKEDIN_TOOLKIT_TOKEN", command: "", args: [], env: {}, tools: {} } } }),
     "LinkedIn set to the linkedin-toolkit bridge. Save the pairing token, then press Test connection.").then(renderSetup));
+  $("#wcOn").addEventListener("change", (e) => act(() => api("/api/setup/config", "POST", { changes: { "work_calendar.enabled": e.target.checked } }),
+    e.target.checked ? "Your work calendar will be copied every 10 minutes." : "Work calendar copying is off. Copies already made stay.").then(renderSetup));
+  const msShow = async () => {
+    const box = $("#msState"); if (!box) return;
+    const s = await api("/api/setup/microsoft/status");
+    box.innerHTML = s.state === "waiting" ? `Open <a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.url)}</a> and enter the code <b class="mono">${esc(s.user_code)}</b>, then sign in with your work account. Waiting…`
+      : s.state === "error" ? `<span class="bad">${esc(s.error)}</span>`
+      : s.signed_in_as ? `Signed in as <b>${esc(s.signed_in_as)}</b>.` : "Not signed in yet.";
+    if (s.state === "waiting") setTimeout(msShow, 3000); else if (s.state === "done") toast(`Signed in to Microsoft as ${s.account}.`);
+  };
+  msShow();
+  const ms = $("#msSignIn"); if (ms) ms.addEventListener("click", async () => {
+    try { const r = await api("/api/setup/microsoft/start", "POST", {}); window.open(r.url, "_blank"); msShow(); }
+    catch (e) { toast("Error: " + e.message, 8000); }
+  });
+  const drawWs = async () => {
+    const box = $("#notionWs");
+    try {
+      const r = await api("/api/setup/notion-workspaces");
+      box.innerHTML = r.workspaces.length ? `<ul class="reviewlist">${r.workspaces.map(w => w.ok
+        ? `<li><b>${esc(w.workspace)}</b> <span class="chip ok">connected</span> · ${w.databases} database${w.databases === 1 ? "" : "s"} shared${w.with_dates.length ? `, with dates: ${esc(w.with_dates.slice(0, 6).join(", "))}${w.with_dates.length > 6 ? "…" : ""}` : " (none with a date column yet: share your event databases with the integration)"} <button class="btn small" data-ws-remove="${esc(w.env)}">Remove</button></li>`
+        : `<li><span class="chip warn">not working</span> ${esc(w.error)} <button class="btn small" data-ws-remove="${esc(w.env)}">Remove</button></li>`).join("")}</ul>`
+        : "No workspace connected yet.";
+      box.querySelectorAll("[data-ws-remove]").forEach(b => b.addEventListener("click", () =>
+        act(() => api("/api/setup/notion-workspace/remove", "POST", { env: b.dataset.wsRemove }), "Workspace removed. Events already on your calendar stay.").then(renderSetup)));
+    } catch (e) { box.textContent = "Could not read your workspaces: " + e.message; }
+  };
+  drawWs();
+  $("#notionAdd").addEventListener("click", () => { const token = $("#notionToken").value.trim(); if (!token) return toast("Paste the integration secret first.");
+    $("#notionAdd").disabled = true; $("#notionAdd").textContent = "Checking…";
+    act(() => api("/api/setup/notion-workspace", "POST", { token }), (r) => `Connected ${r.workspace || "the workspace"}: ${r.databases} database(s) shared.`).then(renderSetup); });
+  $("#notionCal").addEventListener("change", (e) => act(() => api("/api/setup/config", "POST", { changes: { "notion.calendar_sync": e.target.checked } }),
+    e.target.checked ? "Notion events will go on your calendar." : "Notion events stay out of your calendar.").then(renderSetup));
   $("#notionBtn").addEventListener("click", () => { const page = $("#notionPage").value.trim(); if (!page) return toast("Paste the Notion page link first."); act(() => api("/api/setup/notion", "POST", { page }), (r) => `Notion database created${r.url ? ": " + r.url : ""}.`).then(renderSetup); });
   $("#notifSave").addEventListener("click", () => {
     const ntfy = host.querySelector('[data-k="notifications.ntfy_url"]').value.trim(), chat = host.querySelector('[data-k="notifications.telegram_chat_id"]').value.trim();

@@ -84,7 +84,7 @@ def is_application_ack(msg: dict[str, Any]) -> bool:
     """A company only confirming it received your application (and asking nothing of you now)."""
     subject, body = msg.get("subject", "") or "", (msg.get("body_text", "") or "")[:4000]
     text = f"{subject}\n{body}"
-    if msg.get("in_reply_to") or msg.get("has_calendar_invite") or msg.get("invites"):
+    if msg.get("in_reply_to") or msg.get("has_calendar_invite") or msg.get("invites") or msg.get("add_to_calendar"):
         return False  # part of a conversation, or a meeting: not a plain acknowledgment
     if not ACK.search(text) or _rejected(text) or _requests(text):
         return False

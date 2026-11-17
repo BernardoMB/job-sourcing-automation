@@ -18,7 +18,7 @@ def test_walk_away_brief_decide_go(steward):
     assert summary["errors"] == []
     assert summary["ingested"]["email"] == 7 and summary["ingested"]["linkedin"] == 2
     assert summary["ingested"]["calendar"] == 1
-    assert summary["auto_executed"] == 0  # nothing is earned yet: everything waits for you
+    assert summary["auto_executed"] == 1  # only the calendar invitation: accepted without asking
 
     by = drafts_by_company(steward)
     assert set(by) >= {"Northwind Payments", "Lumen Analytics", "Brightpath Health", "Orbital Labs",
@@ -38,29 +38,30 @@ def test_walk_away_brief_decide_go(steward):
     assert "5.5 years" in by["Northwind Payments"]["actions_json"]
     # Proposed time collides with Team sync (+buffer): counter-proposal, no booking.
     lumen = steward.db.get_draft(by["Lumen Analytics"]["id"])
-    assert "create_event" not in lumen["actions_json"] and "Would any of these work" in lumen["actions_json"]
-    # Calendar invitation that fits: RSVP accept.
-    assert "rsvp_event" in by["Cobalt Cloud"]["actions_json"]
+    assert "create_event" not in lumen["actions_json"] and "not available at that time" in lumen["actions_json"]
+    # Calendar invitation: accepted right away, nobody asked.
+    cobalt = by["Cobalt Cloud"]
+    assert "rsvp_event" in cobalt["actions_json"] and cobalt["status"] == "executed"
+    assert next(e for e in sandbox_json(steward, "calendar.json")["events"]
+                if e["id"] == "cobalt-tech-1")["my_response"] == "accepted"
 
     # Decide in one sitting, then go.
-    for company in ("Northwind Payments", "Cedar Fintech", "Cobalt Cloud", "Quanta Systems"):
+    for company in ("Northwind Payments", "Cedar Fintech", "Quanta Systems"):
         decisions.stage(steward.db, by[company]["id"], "approve")
     decisions.stage(steward.db, by["Helix Robotics"]["id"], "reject", note="Say I am keen to learn Rust")
     result = run(steward.go())
-    assert result["committed"] == {"approved": 4, "rejected": 1}
-    assert result["executed"] == 4 and result["failed"] == 0
+    assert result["committed"] == {"approved": 3, "rejected": 1}
+    assert result["executed"] == 3 and result["failed"] == 0
 
     sent = sandbox_json(steward, "outbox.json")["sent"]
     assert {m["to"] for m in sent} == {"priya.shah@northwind-payments.example", "elena.petrova@quanta-systems.example"}
     assert all(m["in_reply_to"] for m in sent)  # replies stay in the recruiter's thread
     li = sandbox_json(steward, "linkedin.json")["sent"]
     assert [m["conversation_id"] for m in li] == ["li-202"]
-    cal = sandbox_json(steward, "calendar.json")["events"]
-    assert next(e for e in cal if e["id"] == "cobalt-tech-1")["my_response"] == "accepted"
 
     assert steward.ledger.verify()["ok"]
     kinds = [e["kind"] for e in steward.ledger.entries(newest_first=False)]
-    assert kinds.count("decision") == 5 and kinds.count("execution") == 4
+    assert kinds.count("decision") == 4 and kinds.count("execution") == 4  # 3 approved + the auto-accept
 
 
 def test_dont_ask_again_then_auto_handles_and_override_demotes(steward):
@@ -75,7 +76,7 @@ def test_dont_ask_again_then_auto_handles_and_override_demotes(steward):
                  "When are you free for a short call next week?")
     summary = run(steward.cycle(force=True))
     assert summary["auto_executed"] == 1
-    auto = steward.db.query_one("SELECT * FROM drafts WHERE route = 'auto_approve'")
+    auto = steward.db.query_one("SELECT * FROM drafts WHERE route = 'auto_approve' AND channel != 'calendar'")
     assert auto["status"] == "executed" and auto["matched_rule_id"] == res["rule_id"]
     assert any(m["to"] == "omar@vertex-robotics.example" for m in sandbox_json(steward, "outbox.json")["sent"])
     assert steward.ledger.entries("auto_execution")

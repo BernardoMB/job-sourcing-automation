@@ -130,6 +130,13 @@ def set_stage(db: Database, opp_id: int, stage: str, force: bool = False) -> Non
     db.update("opportunities", opp_id, {"stage": new, "updated_at": now_iso()})
 
 
+def note(db: Database, opp_id: int | None, action: str) -> None:
+    """The last thing that happened on this position: the pipeline's Last action column."""
+    if not opp_id or not db.get_opportunity(opp_id):
+        return
+    db.update("opportunities", opp_id, {"last_action": action[:200], "last_action_at": now_iso(), "updated_at": now_iso()})
+
+
 def record_outbound(db: Database, opp_id: int | None, next_action: str = "") -> None:
     if not opp_id:
         return
@@ -144,7 +151,7 @@ def record_outbound(db: Database, opp_id: int | None, next_action: str = "") -> 
 
 async def notion_pull(hub: MCPHub, db: Database, opp: dict[str, Any]) -> dict[str, Any]:
     """Read the row from Notion. A stage you changed in Notion wins over Job Sourcer's cache."""
-    if not hub.enabled("notion"):
+    if not hub.enabled("notion") or not hub.cfg.notion.database_id:
         return opp
     res = await hub.call("notion", "query_opportunities", {"steward_id": opp["id"]})
     rows = res.get("results", [])
@@ -163,7 +170,7 @@ async def notion_pull(hub: MCPHub, db: Database, opp: dict[str, Any]) -> dict[st
 
 
 async def notion_push(hub: MCPHub, db: Database, opp_id: int) -> None:
-    if not hub.enabled("notion"):
+    if not hub.enabled("notion") or not hub.cfg.notion.database_id:
         return
     opp = db.get_opportunity(opp_id)
     if not opp:

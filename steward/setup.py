@@ -25,13 +25,14 @@ SECRETS = {
     "NOTION_TOKEN": "Notion integration secret",
     "TELEGRAM_BOT_TOKEN": "Telegram bot token (optional notifications)",
     "LINKEDIN_TOOLKIT_TOKEN": "LinkedIn toolkit pairing token",
+    "WORK_CALENDAR_ICS_URL": "Published work calendar link (ICS)",
 }
 
 # Settings the dashboard may change. Anything else stays a deliberate edit of steward.yaml.
 EDITABLE_PREFIXES = ("profile.", "mail.", "calendar.", "scheduling.", "linkedin.backend", "linkedin.upstream",
                      "linkedin.hourly_cap",
                      "linkedin.daily_cap", "linkedin.business_hours", "whatsapp.backend", "whatsapp.upstream",
-                     "whatsapp.hourly_cap", "whatsapp.daily_cap", "whatsapp.business_hours", "notion.", "notifications.",
+                     "whatsapp.hourly_cap", "whatsapp.daily_cap", "whatsapp.business_hours", "notion.", "work_calendar.", "notifications.",
                      "autonomy.execute_on_approve", "autonomy.follow_up_after_days", "llm.provider", "llm.model",
                      "llm.claude_code_model")
 STARTUP_NAME = "Job Sourcer.cmd"
@@ -61,7 +62,8 @@ def env_file(cfg: Config) -> Path:
 
 
 def set_secret(cfg: Config, name: str, value: str) -> None:
-    if name not in SECRETS and name != cfg.mail.password_env and name != cfg.notion.token_env:
+    if name not in SECRETS and name not in (cfg.mail.password_env, *notion_token_envs(cfg)) \
+            and not re.fullmatch(r"NOTION_TOKEN_\d+", name):
         raise ValueError(f"{name} is not a secret Job Sourcer manages")
     value = value.strip()
     if "\n" in value or "\r" in value:
@@ -85,8 +87,24 @@ def set_secret(cfg: Config, name: str, value: str) -> None:
 
 
 def secret_status(cfg: Config) -> dict[str, bool]:
-    names = set(SECRETS) | {cfg.mail.password_env, cfg.notion.token_env}
+    names = set(SECRETS) | {cfg.mail.password_env, *notion_token_envs(cfg)}
     return {n: bool(os.environ.get(n)) for n in sorted(names)}
+
+
+def notion_token_envs(cfg: Config) -> list[str]:
+    """The .env names holding one Notion integration token per workspace (the first one also runs the pipeline)."""
+    return list(dict.fromkeys([cfg.notion.token_env, *cfg.notion.extra_token_envs]))
+
+
+def next_notion_token_env(cfg: Config) -> str:
+    """Where a newly connected workspace's token goes: the main name if it is free, else NOTION_TOKEN_2, _3, ..."""
+    if not os.environ.get(cfg.notion.token_env):
+        return cfg.notion.token_env
+    taken = set(notion_token_envs(cfg))
+    n = 2
+    while f"NOTION_TOKEN_{n}" in taken:
+        n += 1
+    return f"NOTION_TOKEN_{n}"
 
 
 def notion_page_id(text: str) -> str:
@@ -258,15 +276,30 @@ def checks(cfg: Config) -> list[dict[str, Any]]:
                          "WhatsApp."))
 
     n = cfg.notion
-    if n.enabled:
-        has = bool(os.environ.get(n.token_env))
-        ok = has and bool(n.database_id)
-        out.append(_step("notion", "Notion pipeline", "ok" if ok else "todo",
-                         f"database {n.database_id or '(none)'}" + ("" if has else " · no token"),
-                         "Paste the integration secret below, then create the database from a shared page."))
+    workspaces = [e for e in notion_token_envs(cfg) if os.environ.get(e)]
+    if n.enabled and workspaces:
+        parts = [f"{len(workspaces)} workspace{'s' if len(workspaces) != 1 else ''} connected",
+                 f"events to calendar {'on' if n.calendar_sync else 'off'}",
+                 f"pipeline database {'set' if n.database_id else 'not set'}"]
+        out.append(_step("notion", "Notion", "ok", " · ".join(parts), ""))
     else:
-        out.append(_step("notion", "Notion pipeline", "off", "Optional. Your pipeline is always kept locally too.",
-                         "Turn it on below if you want the pipeline mirrored to Notion."))
+        out.append(_step("notion", "Notion", "todo" if n.enabled else "off",
+                         "Optional. Connect your Notion workspaces to put their scheduled entries on your calendar "
+                         "and mirror your pipeline.",
+                         "Add a workspace below with its integration secret."))
+
+    w = cfg.work_calendar
+    if w.enabled:
+        if w.source == "ics":
+            ready, how = bool(os.environ.get(w.ics_url_env)), "published calendar link"
+        else:
+            ready, how = bool(w.graph_client_id) and cfg.resolve(w.token_file).exists(), "Microsoft sign-in"
+        out.append(_step("workcal", "Work calendar", "ok" if ready else "todo",
+                         f"{how} · copies every {w.poll_minutes} min · detail: {w.detail}",
+                         "Paste the link, or sign in with Microsoft, below."))
+    else:
+        out.append(_step("workcal", "Work calendar", "off", "Optional. Mirror your company calendar onto this one.",
+                         "Turn it on below."))
 
     nt = cfg.notifications
     alerts = (["sound on new events"] if nt.sound else []) + nt.channels
@@ -300,6 +333,11 @@ def editable_values(cfg: Config) -> dict[str, Any]:
         "linkedin.backend": cfg.linkedin.backend,
         "whatsapp.backend": cfg.whatsapp.backend, "whatsapp.business_hours": cfg.whatsapp.business_hours,
         "notion.enabled": cfg.notion.enabled, "notion.database_id": cfg.notion.database_id,
+        "notion.calendar_sync": cfg.notion.calendar_sync,
+        "work_calendar.enabled": cfg.work_calendar.enabled, "work_calendar.source": cfg.work_calendar.source,
+        "work_calendar.graph_client_id": cfg.work_calendar.graph_client_id,
+        "work_calendar.graph_tenant": cfg.work_calendar.graph_tenant, "work_calendar.detail": cfg.work_calendar.detail,
+        "work_calendar.title_prefix": cfg.work_calendar.title_prefix,
         "notifications.channels": cfg.notifications.channels, "notifications.ntfy_url": cfg.notifications.ntfy_url,
         "notifications.telegram_chat_id": cfg.notifications.telegram_chat_id,
         "notifications.quiet_hours": cfg.notifications.quiet_hours,

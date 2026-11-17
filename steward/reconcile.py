@@ -28,6 +28,7 @@ from steward.mcp_hub import ExecutorCapability, MCPHub, MCPToolError
 from steward.timeutil import fmt_local, now_iso, parse_iso, to_iso, utcnow
 
 OPEN = ("pending", "approved", "edited", "queued", "deferred", "failed")
+CHANNEL_NAMES = {"email": "email", "linkedin": "LinkedIn", "whatsapp": "WhatsApp"}
 
 
 def _actions(draft: dict[str, Any]) -> list[dict[str, Any]]:
@@ -77,6 +78,7 @@ def _record_manual(st, draft: dict[str, Any], channel: str, thread_key: str, rec
         st.db.execute("INSERT OR IGNORE INTO message_ids (message_id, thread_key) VALUES (?, ?)",
                       (external_id, thread_key))
     pipeline.record_outbound(st.db, draft["opportunity_id"], f"You replied yourself on {channel}")
+    pipeline.note(st.db, draft["opportunity_id"], f"You replied yourself ({CHANNEL_NAMES.get(channel, channel)})")
 
 
 def handed_off(st, days: int = 7) -> list[dict[str, Any]]:

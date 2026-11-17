@@ -17,6 +17,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import secrets
 import time
 from pathlib import Path
@@ -29,6 +30,7 @@ from steward import ASSETS, activity, linkedin_health, work_queue
 from steward import briefing as briefing_mod
 from steward import decisions
 from steward import linkedin_bridge
+from steward import microsoft
 from steward import setup as setup_mod
 from steward import sound
 from steward import tasks as tasks_mod
@@ -39,7 +41,7 @@ from steward.llm.schemas import CRITIQUE_SCHEMA
 from steward.mcp_hub import MCPHub, MCPToolError
 from steward.notify import upcoming
 from steward.orchestrator import Steward
-from steward.pipeline import set_stage
+from steward.pipeline import note, set_stage
 from steward.taxonomy import STAGES, TIER_LABELS
 from steward.timeutil import fmt_local, now_iso
 
@@ -348,6 +350,16 @@ def create_app(cfg: Config, watch: bool = True, tick: int | None = None) -> Fast
         bump("revised", id=res["draft_id"] or draft_id)
         return res
 
+    @app.post("/api/review-positions")
+    async def review_positions() -> dict[str, Any]:
+        try:
+            async with lock:
+                res = await steward.review_positions()
+        except decisions.DecisionError as exc:
+            raise bad(exc)
+        bump("revised", id=None)
+        return res
+
     @app.post("/api/drafts/{draft_id}/rule")
     async def item_rule(draft_id: int, body: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -436,6 +448,7 @@ def create_app(cfg: Config, watch: bool = True, tick: int | None = None) -> Fast
         if body.get("stage") not in STAGES:
             raise HTTPException(400, "unknown stage")
         set_stage(db, opp_id, body["stage"], force=True)
+        note(db, opp_id, f"You moved it to {STAGES[body['stage']]}")
         steward.rescore()
         bump("pipeline", id=opp_id)
         return {"ok": True}
@@ -571,7 +584,7 @@ def create_app(cfg: Config, watch: bool = True, tick: int | None = None) -> Fast
     async def setup_probe(name: str) -> dict[str, Any]:
         tools = {"mail": ("whoami", {}), "calendar": ("pending_invites", {"days": 2}), "cv": ("get_profile", {}),
                  "linkedin": ("upstream_tools", {"refresh": True}), "whatsapp": ("health", {}),
-                 "notion": ("notion_status", {})}
+                 "notion": ("notion_status", {}), "workcal": ("status", {})}
         if name == "llm":
             try:
                 out = await asyncio.to_thread(steward.llm.json, "critique", "Reply with the JSON object requested.",
@@ -606,6 +619,8 @@ def create_app(cfg: Config, watch: bool = True, tick: int | None = None) -> Fast
             "whatsapp": lambda r: f"Connected ({r.get('backend')}): {r.get('chats')} chat(s) with messages from "
                                   "others in the last 30 days.",
             "notion": lambda r: f"Database '{r.get('title')}' reachable",
+            "workcal": lambda r: (f"Read your work calendar{' as ' + r['account'] if r.get('account') else ''}: "
+                                  f"{r.get('next_7_days')} meeting(s) in the next 7 days."),
         }[name](res)
         return {"ok": True, "detail": detail}
 
@@ -630,6 +645,88 @@ def create_app(cfg: Config, watch: bool = True, tick: int | None = None) -> Fast
         except Exception as exc:  # noqa: BLE001
             raise bad(exc)
         return {"ok": True, **res}
+
+    async def _notion_workspace(cfg_now, token_env: str) -> dict[str, Any]:
+        temp = cfg_now.model_copy(deep=True)
+        temp.notion.enabled = True
+        if token_env not in setup_mod.notion_token_envs(temp):
+            temp.notion.extra_token_envs = [*temp.notion.extra_token_envs, token_env]
+        async with MCPHub(temp) as hub:
+            return await hub.call("notion", "workspace_status", {"token_env": token_env}, timeout=120)
+
+    @app.get("/api/setup/notion-workspaces")
+    async def notion_workspaces() -> dict[str, Any]:
+        cfg_now, out = C(), []
+        for env in setup_mod.notion_token_envs(cfg_now):
+            if not os.environ.get(env):
+                continue
+            try:
+                res = await _notion_workspace(cfg_now, env)
+                dbs = res["databases"]
+                out.append({"env": env, "ok": True, "workspace": res["workspace"] or "Notion workspace",
+                            "databases": len(dbs), "with_dates": [d["title"] for d in dbs if d["date_properties"]]})
+            except Exception as exc:  # noqa: BLE001
+                out.append({"env": env, "ok": False, "error": str(exc)[:300]})
+        return {"workspaces": out, "calendar_sync": cfg_now.notion.calendar_sync}
+
+    @app.post("/api/setup/notion-workspace")
+    async def add_notion_workspace(body: dict[str, Any]) -> dict[str, Any]:
+        token = (body.get("token") or "").strip()
+        if not token:
+            raise HTTPException(400, "Paste the integration secret first")
+        cfg_now = C()
+        env = setup_mod.next_notion_token_env(cfg_now)
+        os.environ[env] = token
+        try:
+            res = await _notion_workspace(cfg_now, env)
+        except Exception as exc:  # noqa: BLE001
+            os.environ.pop(env, None)
+            raise HTTPException(400, f"Notion did not accept this secret: {str(exc)[:300]}") from exc
+        setup_mod.set_secret(cfg_now, env, token)
+        extras = [e for e in cfg_now.notion.extra_token_envs if e != env]
+        if env != cfg_now.notion.token_env:
+            extras.append(env)
+        reload(setup_mod.update_config(cfg_now, {"notion.enabled": True, "notion.extra_token_envs": extras}))
+        bump("settings")
+        return {"ok": True, "env": env, "workspace": res["workspace"], "databases": len(res["databases"])}
+
+    @app.post("/api/setup/notion-workspace/remove")
+    async def remove_notion_workspace(body: dict[str, Any]) -> dict[str, Any]:
+        cfg_now, env = C(), body.get("env", "")
+        if env not in setup_mod.notion_token_envs(cfg_now):
+            raise HTTPException(400, "Unknown workspace")
+        setup_mod.set_secret(cfg_now, env, "")
+        reload(setup_mod.update_config(cfg_now, {
+            "notion.extra_token_envs": [e for e in cfg_now.notion.extra_token_envs if e != env]}))
+        bump("settings")
+        return {"ok": True}
+
+    ms_flow: dict[str, Any] = {}
+
+    @app.post("/api/setup/microsoft/start")
+    async def microsoft_start() -> dict[str, Any]:
+        """Start Microsoft's sign-in: you enter the code on Microsoft's page; this waits in the background."""
+        try:
+            flow = await asyncio.to_thread(microsoft.start_sign_in, C())
+        except Exception as exc:  # noqa: BLE001
+            raise bad(exc)
+        ms_flow.clear()
+        ms_flow.update(state="waiting", user_code=flow["user_code"], url=flow["verification_uri"])
+
+        async def finish() -> None:
+            try:
+                res = await asyncio.to_thread(microsoft.finish_sign_in, C(), flow)
+                ms_flow.update(state="done", account=res["account"])
+            except Exception as exc:  # noqa: BLE001
+                ms_flow.update(state="error", error=str(exc)[:400])
+            bump("settings")
+
+        asyncio.create_task(finish())
+        return {"user_code": flow["user_code"], "url": flow["verification_uri"]}
+
+    @app.get("/api/setup/microsoft/status")
+    async def microsoft_status() -> dict[str, Any]:
+        return {**ms_flow, "signed_in_as": microsoft.account(C())}
 
     @app.post("/api/setup/autostart")
     async def setup_autostart(body: dict[str, Any]) -> dict[str, Any]:

@@ -281,6 +281,9 @@ class OfflineLLM:
         lines = [f"Hi {name},", ""]
         answered, unanswered, commitments = [], [], []
         note = (ctx.get("instruction") or "").split("\nPlan:")[0].strip()
+        checking_in = "follow_up" in cats and "still open" in (cls.get("summary") or "")
+        if checking_in:
+            note = ""  # the position review's own instruction: written below
         if note and DECLINE_RE.search(note):
             lines += [f"Thank you for thinking of me for the {role} role at {company}. After some consideration, "
                       "I'll pass on this one for now, but I'd be glad to stay in touch about future roles.",
@@ -296,6 +299,10 @@ class OfflineLLM:
         elif "meeting_change" in cats:
             lines.append(f"I saw our meeting about the {role} role changed - no problem at all. I'm still very "
                          "interested and happy to find another time.")
+        elif checking_in:
+            lines.append(f"I hope you're doing well! I wanted to check in on the {role} opportunity at {company}. "
+                         "Could you share an update on where things stand, and let me know if the position is still "
+                         "open? I'm still very interested.")
         elif "follow_up" in cats:
             lines.append(f"I wanted to follow up on the {role} opportunity at {company}. I'm still very interested "
                          "and would love to hear about next steps.")
@@ -344,11 +351,15 @@ class OfflineLLM:
         elif kind in ("conflict_counter", "propose_slots") and slots:
             intro = ("Unfortunately I'm not available at that time. Would any of these work instead?"
                      if kind == "conflict_counter" else "Here are a few times that work for me:")
+            if any(s.get("daily") for s in slots):
+                intro = ("Unfortunately I'm not available at that time. Here is my availability for the next two weeks:"
+                         if kind == "conflict_counter" else "Here is my availability for the next two weeks:")
             lines.append(intro)
             lines.extend(f"- {s['label']}" for s in slots)
         elif kind == "invite_accept":
             lines.append("I've accepted the invite - looking forward to it.")
-        if kind == "none" and "rejection" not in cats and "offer" not in cats and not cls.get("candidate_tasks"):
+        if kind == "none" and "rejection" not in cats and "offer" not in cats and not cls.get("candidate_tasks") \
+                and not checking_in:
             lines.append("I'd love to set up a quick call to learn more. What times work for you this week?")
         lines += ["", "Best,", profile.signature or profile.name]
         body = "\n".join(lines)

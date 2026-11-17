@@ -129,6 +129,12 @@ def build(cfg: Config, db: Database, meetings: list[dict[str, Any]] | None = Non
         by_stage[o["stage"]] = by_stage.get(o["stage"], 0) + 1
         o["stage_label"] = stage_label(o["stage"])
         o["last_contact"] = ago(max(o.get("last_inbound_at") or "", o.get("last_outbound_at") or "") or None)
+        if not o.get("last_action"):  # positions from before the Last action column: best guess from the dates
+            sent = (o.get("last_outbound_at") or "") > (o.get("last_inbound_at") or "")
+            o["last_action"] = ("Rejected: they are not moving forward" if o["stage"] == "closed_lost"
+                                else "Reply sent" if sent else "Message received" if o.get("last_inbound_at") else "")
+            o["last_action_at"] = max(o.get("last_inbound_at") or "", o.get("last_outbound_at") or "") or None
+        o["last_action_ago"] = ago(o.get("last_action_at")) if o.get("last_action_at") else ""
     rules = [rule_view(r) for r in db.query("SELECT * FROM rules WHERE status != 'retired' ORDER BY id")]
     last_cycle = db.kv_get("last_cycle", {}) or {}
     deadlines = tasks_mod.deadlines(cfg, db)
@@ -163,7 +169,7 @@ def build(cfg: Config, db: Database, meetings: list[dict[str, Any]] | None = Non
         "fyi": fyi,
         "upcoming": meetings or [],
         "deadlines": deadlines,
-        "pipeline": {"by_stage": by_stage, "opportunities": opps},
+        "pipeline": {"by_stage": by_stage, "opportunities": opps, "stale_days": cfg.autonomy.follow_up_after_days},
         "rules": rules,
         "calibration": calibration(db, cfg),
         "llm": {

@@ -28,12 +28,13 @@ window. Go to the **Setup** tab. Each step shows *Ready*, *Needs you*, or *Optio
 | 4 | Google Calendar OAuth client (a JSON file) + one click to connect | console.cloud.google.com | free | yes |
 | 5 | linkedin-toolkit Chrome extension + pairing | your Chrome | free | for LinkedIn |
 | 5b | Scan one QR code with WhatsApp (`steward whatsapp-link`) | your phone | free | for WhatsApp |
-| 6 | Notion integration secret + a page | notion.so | free | optional |
+| 6 | One Notion integration secret per workspace, shared with your event pages (+ a page for the pipeline) | notion.so | free | optional |
+| 6b | Work calendar: a published Outlook calendar link, or an app registration + Microsoft sign-in | outlook.office.com / portal.azure.com | free | optional |
 | 7 | ntfy topic or Telegram bot | ntfy.sh / Telegram | free | optional |
 | 8 | A phone number that emails you voicemails (Google Voice or carrier voicemail-to-email) | voice.google.com / your carrier | free | for calls |
 
 Nothing is sent anywhere except: Claude (to reason about messages), your own email/calendar/LinkedIn/WhatsApp/Notion
-accounts, and your notification service if you set one.
+accounts, your work Microsoft 365 calendar (read only), and your notification service if you set one.
 
 ---
 
@@ -237,31 +238,129 @@ account being restricted, so keep the caps low.
 
 ## 8. Notion (optional, Setup → step 8)
 
-Job Sourcer always keeps your pipeline locally (Pipeline tab). Notion is an optional mirror you can also edit: if
-you move an opportunity to "Offer" there, Job Sourcer stops acting on its own for that thread.
+Notion does two separate jobs, and you can use either one:
 
-1. Go to https://www.notion.so/profile/integrations → **New integration** (type *Internal*), name it "Job Sourcer",
-   copy the **Internal Integration Secret**.
-2. Paste it into **Notion integration secret** in Setup step 8 and press **Save**.
-3. In Notion, create a page called "Job Search". On that page, open **••• → Connections** and add "Job Sourcer".
-4. Copy the page link (**Share → Copy link**), paste it into Setup step 8, press **Create the pipeline database**.
+- **Your Notion events on your calendar.** Every 15 minutes, Job Sourcer reads every Notion database you share with
+  it, in every workspace you connect. Each entry with a date **and a time** in the next 60 days goes on your Google
+  Calendar, titled like the entry, with a link back to it. Nobody is invited. Move or rename the entry in Notion and
+  the calendar event follows. Dates without a time (deadlines, all-day notes) are skipped. An entry with a start
+  time but no end gets 1 hour. If you delete a copy from your calendar it is not added back, and deleting the entry
+  in Notion leaves the calendar alone.
+- **Your job pipeline in Notion** (an optional mirror you can also edit). If you move an opportunity to "Offer"
+  there, Job Sourcer stops acting on its own for that thread. Job Sourcer always keeps the pipeline locally too
+  (Pipeline tab).
 
-## 9. Notifications (Setup → step 9)
+Notion has no sign-in a desktop app like this one can use, so each workspace connects through an *integration*
+you create. Integrations belong to one workspace, so create one per workspace:
+
+1. Go to https://www.notion.so/profile/integrations → **New integration**. Pick the **workspace**, type
+   **Internal**, name it "Job Sourcer", and save.
+2. On the integration's page, copy the **Internal Integration Secret** (it starts with `ntn_` or `secret_`).
+3. In Setup step 8, paste it into the box next to **Add workspace** and press **Add workspace**. Job Sourcer checks
+   the secret with Notion before saving it to `workspace/.env`: the first workspace is `NOTION_TOKEN`, the next ones
+   `NOTION_TOKEN_2`, `NOTION_TOKEN_3`, and so on. Only these names go in `steward.yaml`, never the secrets.
+4. **Share your pages with the integration.** It sees nothing until you do. In Notion, open each page or database
+   that holds your events, then **••• → Connections →** add "Job Sourcer". Sharing a top-level page shares
+   everything under it.
+5. Back in Setup step 8, the workspace list shows each connected workspace and its shared databases that have a
+   date column. If it says *0 databases shared*, step 4 is not done yet.
+6. Repeat steps 1-5 for every workspace you use.
+7. Keep **Put entries with a date and time from my Notion databases on my calendar** switched on (it is on by default).
+
+**Pipeline mirror (optional):** in Notion, create a page called "Job Search" and share it with the integration
+(step 4). Copy the page link (**Share → Copy link**), paste it into Setup step 8, and press **Create the pipeline
+database**. That database is never copied to your calendar.
+
+To disconnect a workspace, press **Remove** next to it: its secret is cleared from `.env`, and events already on your
+calendar stay. Settings are under `notion:` in `steward.yaml`: `calendar_sync`, `calendar_poll_minutes`,
+`calendar_lookahead_days`, `calendar_default_minutes`, and `extra_token_envs`.
+
+## 9. Work calendar: Microsoft 365 (optional, Setup → step 9)
+
+This copies the meetings on your company calendar onto your Google Calendar **every 10 minutes**. Your
+availability is then right everywhere, including the times Job Sourcer offers recruiters. New meetings are added,
+moved or renamed ones follow, and cancelled ones are removed. Job Sourcer only ever removes copies it made itself,
+and if a check finds an empty work calendar where there were meetings, it removes nothing (a broken link is more
+likely than a free month). Repeating meetings are copied one by one. All-day events are skipped.
+
+**Check your company's policy first.** Many companies do not allow copying work calendar details to a personal
+account. The two ways in below only work if your company allows them, and Job Sourcer never works around a
+company that does not: no reusing the Teams or Outlook sign-in, no scraping Outlook on the web. If neither way
+works, ask IT to allow one of them.
+
+### Pick what a copy shows (Setup step 9 → *What a copy shows*)
+
+- **busy**: only "Busy (work)". Your time is blocked, and no details leave your company calendar.
+- **title** (default): the meeting title, with "[Work] " in front.
+- **full**: title, location, Teams/Zoom join link, and organizer.
+
+The meeting body and the attendee list are never copied, at any level. Meetings marked *Free* in Outlook are
+skipped (`work_calendar.include_free: true` copies them too).
+
+### Way A: a published calendar link (simplest)
+
+1. Open Outlook on the web (https://outlook.office.com) with your work account.
+2. **Settings** (gear icon) → **Calendar** → **Shared calendars** → **Publish a calendar**.
+3. Pick your calendar and what it may show (**Can view all details** or **Can view titles and locations**), then
+   press **Publish**.
+4. Copy the **ICS** link (not the HTML one).
+5. In Setup step 9, set **Way in** to `ics` and press **Save**. Paste the link into **Published work calendar link
+   (ICS)** and press **Save**. The link is a secret: it goes to `workspace/.env` as `WORK_CALENDAR_ICS_URL`.
+6. Switch on **Mirror my work calendar onto my Google Calendar**, then press **Test connection**. It should say
+   how many meetings you have in the next 7 days.
+
+If **Publish a calendar** is missing, your company has turned it off: use Way B, or ask IT.
+
+Anyone with the link can read the calendar. To revoke it, go back to **Publish a calendar** and choose **Reset links**
+or **Unpublish**, then paste the new link in Setup.
+
+### Way B: sign in with Microsoft
+
+This uses Microsoft's own sign-in page with your work account, including its MFA and company sign-in rules.
+Job Sourcer asks only for **read-only calendar access** (`Calendars.Read`, plus `User.Read` to show which account
+signed in). It needs an *app registration*, which you or your IT team create once:
+
+1. Open https://portal.azure.com → **Microsoft Entra ID** → **App registrations** → **New registration**.
+   - Name: "Job Sourcer".
+   - Supported account types: **Accounts in any organizational directory**. If you register it inside your
+     company's own directory, single tenant is fine.
+   - Redirect URI: leave empty. Press **Register**.
+   - If your company does not let you register apps, create it in a personal Azure account, or ask IT to create
+     it for you.
+2. On the app's **Overview**, copy the **Application (client) ID**.
+3. **Authentication** → **Advanced settings** → **Allow public client flows: Yes** → **Save**.
+4. **API permissions** → **Add a permission** → **Microsoft Graph** → **Delegated permissions** → tick
+   **Calendars.Read** (and **User.Read** if it is not there already) → **Add permissions**.
+5. In Setup step 9, set **Way in** to `graph` and press **Save**. Paste the **Application (client) ID**, and leave
+   **Tenant** as `organizations` (or enter your company's domain or tenant ID). Press **Save**.
+6. Press **Sign in with Microsoft**. A Microsoft page opens and Setup shows a short code. Enter the code on that
+   page and sign in with your work account. Setup then shows *Signed in as …*. The token is kept in
+   `workspace/secrets/microsoft_token.json`, which is never committed, and is refreshed by itself.
+7. Switch on **Mirror my work calendar onto my Google Calendar**, then press **Test connection**.
+
+If Microsoft answers *Need admin approval* or *blocked by Conditional Access* when you sign in, your company has
+not approved the app. Ask IT to grant it consent (read-only calendar), or use Way A.
+
+Settings are under `work_calendar:` in `steward.yaml`: `enabled`, `source`, `detail`, `title_prefix`,
+`poll_minutes` (10), `lookahead_days` (30), `include_free`, `graph_client_id`, and `graph_tenant`. To stop, switch
+the mirror off in Setup. Copies already made stay on your calendar.
+
+## 10. Notifications (Setup → step 10)
 
 Every check that brings new events (a recruiter message, a call, an invite, a moved or cancelled meeting) plays
 `assets/Tethys Nexus 5.mp3` on this computer, even when the window is closed. Mail filtered out as unrelated stays
 silent, and so is any WhatsApp chat that is not about a job. Switch it off, or press **Play test sound**, in Setup
-step 9. To use another sound, set
+step 10. To use another sound, set
 `notifications.sound_file` in `steward.yaml`.
 
 The dashboard updates live, and the **🔔 Desktop alerts** button gives Windows notifications. To get alerts on
 your phone too:
 
 - **ntfy**: install the ntfy app, subscribe to a long random topic name, and paste `https://ntfy.sh/<topic>` in
-  Setup step 9.
+  Setup step 10.
 - **Telegram**: create a bot with @BotFather, paste its token, and paste your chat id.
 
-## 10. Start when you log in (Setup → step 10)
+## 11. Start when you log in (Setup → step 11)
 
 Turn this on so Job Sourcer keeps watching even when its window is closed. Turning it off removes the startup entry.
 
@@ -270,8 +369,10 @@ Turn this on so Job Sourcer keeps watching even when its window is closed. Turni
 ## How it works day to day
 
 - Job Sourcer wakes up every **30 seconds** and checks email every **1 minute**, your calendar every **2 minutes**,
-  and LinkedIn every **10 minutes** (intervals are in `steward.yaml`: `mail.poll_minutes`, `calendar.poll_minutes`,
-  `linkedin.poll_minutes`). Only new messages cost AI calls.
+  and LinkedIn every **10 minutes**. It copies your work calendar every **10 minutes** and your Notion events every
+  **15 minutes**, when those are set up. The intervals are in `steward.yaml`: `mail.poll_minutes`,
+  `calendar.poll_minutes`, `linkedin.poll_minutes`, `work_calendar.poll_minutes`, and
+  `notion.calendar_poll_minutes`. Only new messages cost AI calls.
 - **Every new event is processed immediately**: a recruiter email, a LinkedIn message, a calendar invitation, a
   meeting that was moved, cancelled, or declined, a missed call or voicemail. Job Sourcer then either:
   - **acts by itself** (only under rules you created with "Don't ask again" or accepted from its suggestions),

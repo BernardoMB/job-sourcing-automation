@@ -11,6 +11,7 @@ import difflib
 import re
 from typing import Any
 
+from steward import pipeline
 from steward.config import Config
 from steward.db import Database, dumps, loads
 from steward.ledger import Ledger
@@ -182,6 +183,9 @@ def commit(cfg: Config, db: Database, ledger: Ledger, draft: dict[str, Any]) -> 
     db.update("drafts", draft["id"], {"status": new_status})
     if new_status == "dismissed":
         db.update("events", draft["event_id"], {"status": "processed"})
+        event = db.get_event(draft["event_id"]) or {}
+        follow_up = (loads(event.get("raw_json"), {}) or {}).get("follow_up")
+        pipeline.note(db, draft["opportunity_id"], "You skipped the follow-up" if follow_up else "You chose not to reply")
     return new_status
 
 

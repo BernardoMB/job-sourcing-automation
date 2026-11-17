@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 from datetime import timedelta
 from typing import Any
@@ -29,8 +30,8 @@ from steward.executor import Executor
 from steward.ledger import Ledger
 from steward.llm import LLMError, LLMRefusal, LLMUnavailable, get_llm
 from steward.mcp_hub import ExecutorCapability, IntegrationDisabled, MCPHub, MCPToolError
-from steward.taxonomy import ACTIVE_STAGES, risk_of
-from steward.timeutil import days_between, fmt_local, fmt_range, now_iso, parse_iso, to_iso, utcnow
+from steward.taxonomy import ACTIVE_STAGES, CLOSED_STAGES, STAGES, risk_of
+from steward.timeutil import days_between, fmt_local, fmt_range, now_iso, parse_iso, to_iso, tz, utcnow
 from steward.work_queue import queue_actions
 
 log = logging.getLogger("steward")
@@ -43,11 +44,37 @@ PREFILTER = re.compile(
     re.IGNORECASE,
 )
 # WhatsApp chats are often in Spanish: a chat is looked at when it has either signal.
+REVIEW_INSTRUCTION = ("Write a short, warm follow-up to the recruiter about this position: ask them for an update on "
+                      "where things stand and whether the position is still open. Do not offer meeting times.")
+WAITING_ON_YOU = ("pending", "approved", "edited", "rejected", "queued", "deferred", "failed")
 JOB_WORDS_ES = re.compile(
     r"\b(vacante|puesto|reclut|entrevista|oferta (laboral|de (trabajo|empleo))|empleo|trabajo|postula|candidat|"
     r"sueldo|salario|curr[ií]cul|oportunidad|contrataci[oó]n|recursos humanos|headhunter|talento)",
     re.IGNORECASE,
 )
+
+
+SPANISH = re.compile(r"\b(hola|gracias|saludos|entrevista|reuni[oó]n|invitaci[oó]n|para|est[aá]s?|tu|su|del|que)\b",
+                     re.IGNORECASE)
+DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre",
+         "noviembre", "diciembre"]
+
+
+def _attendance_note(event: dict[str, Any], found: list[dict[str, Any]], name: str, tz_name: str) -> str:
+    """The short "I will attend" reply to an invitation, in the language it was written in."""
+    last, _, given = (event.get("sender_name") or "").partition(",")  # "Lee, Dana" or "Dana Lee"
+    first = ((given or last).split() or [""])[0]
+    me = (name or "").split()[0] if name and name != "Your Name" else ""
+    if len(SPANISH.findall(f"{event.get('subject', '')}\n{event.get('body_text', '')}")) >= 3:
+        def es(i: dict[str, Any]) -> str:
+            s = parse_iso(i["start"]).astimezone(tz(tz_name))
+            return f"el {DIAS[s.weekday()]} {s.day} de {MESES[s.month - 1]} a las {s.strftime('%H:%M')} ({s.strftime('%Z')})"
+        return (f"Hola{' ' + first if first else ''},\n\nGracias por la invitación. Confirmo mi asistencia "
+                f"{' y '.join(es(i) for i in found)}.\n\nSaludos,\n{me}").rstrip()
+    when = " and ".join(fmt_range(i["start"], i["end"], tz_name) for i in found)
+    return (f"Hi{' ' + first if first else ''},\n\nThank you for the invitation. I confirm I will attend ({when}).\n\n"
+            f"Best regards,\n{me}").rstrip()
 
 
 def hydrate(event: dict[str, Any]) -> dict[str, Any]:
@@ -88,6 +115,8 @@ class Steward:
                 ("linkedin", self.ingest_linkedin, self.cfg.linkedin.poll_minutes),
                 ("whatsapp", self.ingest_whatsapp, self.cfg.whatsapp.poll_minutes),
                 ("calendar", self.ingest_calendar, self.cfg.calendar.poll_minutes),
+                ("notion", self.sync_notion_calendar, self.cfg.notion.calendar_poll_minutes),
+                ("workcal", self.sync_work_calendar, self.cfg.work_calendar.poll_minutes),
             ):
                 # A LinkedIn message notification in the mail makes LinkedIn due right away.
                 nudged = source == "linkedin" and bool(self.db.kv_get("linkedin:check_now"))
@@ -108,6 +137,10 @@ class Steward:
                     checked[source] = "failed"
                     summary["errors"].append(f"{source}: {exc}")
                     log.warning("ingest %s failed: %s", source, exc)
+                    # If a forced check (e.g. "Check now") hit a transient error, mark LinkedIn as
+                    # nudged so the next scheduled cycle retries it even before the poll interval expires.
+                    if force and source == "linkedin":
+                        self.db.kv_set("linkedin:check_now", True)
             # Chime now, before the slow drafting: filtered-out mail and our own follow-ups don't count. A
             # WhatsApp chat counts only once it is known to be about a job (after processing, below).
             summary["new_events"] = self.db.scalar(
@@ -150,7 +183,8 @@ class Steward:
         return summary
 
     def _log_check(self, trigger: str, checked: dict[str, str], summary: dict[str, Any], seconds: float) -> None:
-        names = {"email": "email", "linkedin": "LinkedIn", "whatsapp": "WhatsApp", "calendar": "calendar"}
+        names = {"email": "email", "linkedin": "LinkedIn", "whatsapp": "WhatsApp", "calendar": "calendar",
+                 "notion": "Notion events", "workcal": "work calendar"}
         idle = all(state in ("not due", "off") for state in checked.values()) and not (
             summary["processed"] or summary["auto_executed"] or summary.get("deferred_retried") or summary["errors"]
             or summary.get("reconciled") or summary.get("cleaned"))
@@ -382,6 +416,123 @@ class Steward:
             return {"draft_id": None, "status": "queued", "error": event.get("error") or ""}
         return {"draft_id": None, "status": event.get("status") or "processed"}
 
+    # -- review: follow up on quiet positions ------------------------------------------
+    async def review_positions(self) -> dict[str, Any]:
+        """Draft a follow-up (an update, and is it still open?) for every stale position waiting on nobody but the recruiter.
+
+        A position is followed up when there was no contact for autonomy.follow_up_after_days, it is not closed, you were not turned down, no meeting or invitation for it
+        is on your calendar, and nothing is waiting for you (a decision, a task, a message being read). Each
+        follow-up is a decision item in the briefing: nothing is sent until you approve it."""
+        now = utcnow()
+        drafted: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
+        created: list[tuple[dict[str, Any], int]] = []
+        errors: list[str] = []
+        async with MCPHub(self.cfg) as hub:
+            if not hub.enabled("calendar"):
+                raise decisions.DecisionError("Connect Google Calendar first (Setup step 5): the review checks it "
+                                              "for meetings and invitations.")
+            try:
+                cal = (await hub.call("calendar", "list_events", {
+                    "start": to_iso(now), "end": to_iso(now + timedelta(days=60))})).get("events", [])
+            except MCPToolError as exc:
+                raise decisions.DecisionError("Your calendar could not be read, so no position was reviewed. "
+                                              f"Reconnect Google Calendar, then try again. ({exc})") from exc
+            for opp in self.db.query("SELECT * FROM opportunities ORDER BY id"):
+                name = " - ".join(x for x in (opp.get("company"), opp.get("role")) if x) or \
+                    opp.get("recruiter_name") or f"Position {opp['id']}"
+                why = self._review_blocker(opp, cal)
+                event_id = None if why else self._insert_review_follow_up(opp)
+                if not why and not event_id:
+                    why = "No email, LinkedIn, or WhatsApp conversation with them to follow up in"
+                if why:
+                    skipped.append({"id": opp["id"], "position": name, "reason": why})
+                else:
+                    created.append(({**opp, "name": name}, event_id))
+            if created:
+                await self.process_pending(hub, errors)
+        self.rescore()
+        for opp, event_id in created:
+            d = self.db.query_one("SELECT id FROM drafts WHERE event_id = ? AND status = 'pending' ORDER BY id DESC",
+                                  (event_id,))
+            if d:
+                drafted.append({"id": opp["id"], "position": opp["name"], "draft_id": d["id"]})
+            else:
+                ev = self.db.get_event(event_id) or {}
+                skipped.append({"id": opp["id"], "position": opp["name"],
+                                "reason": f"The follow-up could not be written yet: {ev.get('error') or 'try again'}"})
+        activity.record(self.db, "message", f"Position review: {len(drafted)} follow-up(s) drafted for your decision, "
+                        f"{len(skipped)} position(s) left alone.")
+        return {"drafted": drafted, "skipped": skipped, "errors": errors}
+
+    def _review_blocker(self, opp: dict[str, Any], cal: list[dict[str, Any]]) -> str:
+        """Why this position is not followed up now ('' when it should be)."""
+        if opp["stage"] in CLOSED_STAGES:
+            return f"Closed ({STAGES.get(opp['stage'], opp['stage'])})"
+        if opp["stage"] == "offer":
+            return "You have an offer: you handle it yourself"
+        last = max(opp.get("last_inbound_at") or "", opp.get("last_outbound_at") or "")
+        stale_days = self.cfg.autonomy.follow_up_after_days
+        if last and days_between(last) < stale_days:
+            return f"Not stale yet: last contact {fmt_local(last, self.cfg.profile.timezone)} " \
+                   f"(stale after {stale_days} day{'' if stale_days == 1 else 's'})"
+        for ev in self.db.query("SELECT classification_json, status FROM events WHERE opportunity_id = ?", (opp["id"],)):
+            cls = loads(ev["classification_json"], {}) or {}
+            if cls.get("stage_signal") == "rejection" or "rejection" in (cls.get("categories") or []):
+                return "They turned you down"
+            if ev["status"] == "new":
+                return "A new message about it is still being read"
+        email = (opp.get("recruiter_email") or "").lower()
+        company = (opp.get("company") or "").strip().lower()
+        ours = {(loads(x["result_json"], {}) or {}).get("id") for x in self.db.query(
+            "SELECT x.result_json FROM executions x JOIN drafts d ON d.id = x.draft_id WHERE d.opportunity_id = ? "
+            "AND x.status = 'success' AND x.action_type IN ('create_event', 'add_to_calendar')", (opp["id"],))} - {None}
+        for e in cal:
+            if e.get("my_response") == "declined":
+                continue
+            people = {(a.get("email") or "").lower() for a in e.get("attendees") or []}
+            people.add(((e.get("organizer") or {}).get("email") or "").lower())
+            title = (e.get("title") or "").lower()
+            if e.get("id") in ours or (email and email in people) or (len(company) >= 3 and company in title):
+                when = fmt_range(e.get("start", ""), e.get("end", ""), self.cfg.profile.timezone)
+                if e.get("my_response") == "needsAction":
+                    return f"An invitation is waiting for your answer: {e.get('title') or 'meeting'}, {when}"
+                return f"A meeting is on your calendar: {e.get('title') or 'meeting'}, {when}"
+        if self.db.query_one(f"SELECT 1 FROM drafts WHERE opportunity_id = ? AND status IN {WAITING_ON_YOU}",
+                             (opp["id"],)):
+            return "Something is waiting for you in the briefing"
+        task = self.db.query_one("SELECT title FROM tasks WHERE opportunity_id = ? AND status IN ('open', 'suggested')",
+                                 (opp["id"],))
+        if task:
+            return f"An open task: {task['title']}"
+        return ""
+
+    def _insert_review_follow_up(self, opp: dict[str, Any]) -> int | None:
+        """The follow-up to draft, in their latest conversation (or the one you last wrote in)."""
+        via = self._reply_target(opp)
+        last = self.db.query_one(
+            "SELECT o.* FROM outbound o JOIN opportunity_threads t ON t.thread_key = o.thread_key "
+            "WHERE t.opportunity_id = ? ORDER BY o.id DESC LIMIT 1", (opp["id"],))
+        if not via and not last:
+            return None
+        raw: dict[str, Any] = {"follow_up": True, "review": True, "instruction": REVIEW_INSTRUCTION}
+        if via:
+            raw.update({"channel": via["channel"], "reply_via": via})
+            thread_key = via.get("thread_key") or ""
+        else:
+            raw.update({"channel": last["channel"], "last_outbound": last})
+            thread_key = last["thread_key"]
+        subject = (via or {}).get("subject") or (last or {}).get("subject") or ""
+        return self._insert_event({
+            "source": "steward", "external_id": f"review:{opp['id']}:{now_iso()}", "thread_key": thread_key,
+            "sender_name": opp.get("recruiter_name") or "", "opportunity_id": opp["id"],
+            "sender_address": opp.get("recruiter_email") or ((via or {}).get("to") or [""])[0],
+            "subject": re.sub(r"^(re:\s*)+", "", subject, flags=re.I),
+            "body_text": "(You asked Job Sourcer to check in on this position: ask for an update and whether it is "
+                         "still open.)",
+            "received_at": now_iso(), "raw_json": dumps(raw),
+        })
+
     async def _schedule_from_plan(self, ctx: AgentContext, event: dict[str, Any], cls: dict[str, Any],
                                   plan: dict[str, Any], sched: dict[str, Any], warnings: list[str]) -> dict[str, Any]:
         action = plan["meeting_action"]
@@ -409,8 +560,8 @@ class Steward:
         if action == "find_times" or (action in ("book", "propose_times") and not plan["times"]):
             now = utcnow()
             return {**empty, "kind": "propose_slots",
-                    "slots": await scheduler.slots_between(ctx, now, now + timedelta(days=sch.lookahead_days),
-                                                           sch.default_duration_minutes)}
+                    "slots": await scheduler.offer(ctx, event, now, now + timedelta(days=sch.lookahead_days),
+                                                   sch.default_duration_minutes)}
         times = [window(t) for t in plan["times"]]
         if action == "propose_times":
             return {**empty, "kind": "propose_slots",
@@ -678,6 +829,87 @@ class Steward:
         text = "\n".join(m.get("text", "") for m in msgs[-12:])
         return bool(PREFILTER.search(text) or JOB_WORDS_ES.search(text))
 
+    async def sync_work_calendar(self, hub: MCPHub) -> int:
+        """Mirror your work (Microsoft 365) calendar onto your personal calendar: new meetings are added, moved or
+        renamed ones follow, and cancelled ones are removed (only copies Job Sourcer made). Returns the changes."""
+        w = self.cfg.work_calendar
+        if not (w.enabled and hub.enabled("calendar")):
+            raise IntegrationDisabled("work calendar sync is off")
+        res = await hub.call("workcal", "events", {"days": w.lookahead_days}, timeout=180)
+        events = res.get("events", [])
+        copies: dict[str, dict[str, Any]] = self.db.kv_get("work:calendar_copies", {}) or {}
+        now, cap = utcnow(), ExecutorCapability()
+        added = moved = removed = 0
+        for e in events:
+            known = copies.get(e["uid"]) or {}
+            if known and (known.get("start"), known.get("end"), known.get("title")) == (e["start"], e["end"], e["title"]):
+                continue  # unchanged since the last check (or you deleted the copy: left out)
+            description = "Copied from your work calendar by Job Sourcer." + "".join(
+                f"\n{label}: {e[k]}" for k, label in (("organizer", "Organizer"), ("join_url", "Join"))
+                if e.get(k))
+            out = await hub.call("calendar", "sync_copy", {
+                "uid": e["uid"], "title": e["title"], "start": e["start"], "end": e["end"],
+                "location": e.get("location", ""), "description": description,
+                "event_id": known.get("id", "")}, capability=cap)
+            copies[e["uid"]] = {"id": out["id"], "start": e["start"], "end": e["end"], "title": e["title"]}
+            added += out["status"] == "added"
+            moved += out["status"] == "updated"
+        current = {e["uid"] for e in events}
+        future = [u for u, c in copies.items() if u not in current and (parse_iso(c.get("start")) or now) > now]
+        if future and not events and len(future) > 3:
+            # An empty calendar where meetings were a moment ago is more likely a broken link than a free month.
+            activity.record(self.db, "calendar", "Work calendar came back empty: no copies were removed. Check the "
+                            "link or sign-in in Setup.", "warn")
+        else:
+            for uid in future:
+                await hub.call("calendar", "remove_copy", {"event_id": copies[uid]["id"], "uid": uid}, capability=cap)
+                copies.pop(uid)
+                removed += 1
+        for uid in [u for u, c in copies.items() if (parse_iso(c.get("end")) or now) < now - timedelta(days=2)]:
+            copies.pop(uid)  # long over: no need to remember
+        self.db.kv_set("work:calendar_copies", copies)
+        if added or moved or removed:
+            activity.record(self.db, "calendar", f"Work calendar: {added} meeting(s) added, {moved} moved, "
+                            f"{removed} cancelled ones removed from your calendar.")
+        return added + moved + removed
+
+    async def sync_notion_calendar(self, hub: MCPHub) -> int:
+        """Rows with a date and time in your Notion workspaces go on your calendar, and follow them when they move.
+
+        Every workspace whose integration token is set (notion.token_env plus notion.extra_token_envs) is read;
+        only databases shared with that integration are visible. Nothing is ever removed from the calendar.
+        Returns how many entries were added or moved."""
+        n = self.cfg.notion
+        if not (n.calendar_sync and hub.enabled("notion") and hub.enabled("calendar")):
+            raise IntegrationDisabled("Notion calendar sync is off")
+        tz_name, changed = self.cfg.profile.timezone, 0
+        synced: dict[str, str] = self.db.kv_get("notion:calendar_copies", {}) or {}  # Notion entry uid -> event id
+        for token_env in [n.token_env, *n.extra_token_envs]:
+            if not os.environ.get(token_env):
+                continue
+            res = await hub.call("notion", "scheduled_entries", {
+                "days": n.calendar_lookahead_days, "token_env": token_env, "exclude_database_id": n.database_id,
+                "default_minutes": n.calendar_default_minutes})
+            for e in res.get("entries", []):
+                where = " / ".join(x for x in (e["workspace"], e["database"]) if x)
+                out = await hub.call("calendar", "sync_copy", {
+                    "uid": e["uid"], "title": e["title"], "start": e["start"], "end": e["end"],
+                    "description": f"From Notion ({where}): {e['url']}", "event_id": synced.get(e["uid"], "")},
+                    capability=ExecutorCapability())
+                if out["status"] != "removed":
+                    synced[e["uid"]] = out["id"]
+                when = fmt_range(e["start"], e["end"], tz_name)
+                if out["status"] == "added":
+                    clash = f" It overlaps {', '.join(out['overlaps'])}." if out.get("overlaps") else ""
+                    activity.record(self.db, "calendar", f"From Notion ({where}): {e['title']}, {when} "
+                                    f"added to your calendar.{clash}", "warn" if clash else "info")
+                elif out["status"] == "updated":
+                    activity.record(self.db, "calendar", f"From Notion ({where}): {e['title']} moved on your "
+                                    f"calendar to {when}.")
+                changed += out["status"] in ("added", "updated")
+        self.db.kv_set("notion:calendar_copies", synced)
+        return changed
+
     async def ingest_calendar(self, hub: MCPHub) -> int:
         res = await hub.call("calendar", "pending_invites", {"days": self.cfg.calendar.invite_lookahead_days})
         count = 0
@@ -693,8 +925,9 @@ class Steward:
             if event_id:
                 count += 1
                 activity.record(self.db, "message", f"Calendar invite from {organizer.get('name') or organizer.get('email') or 'someone'}"
-                                f": {inv.get('title', '')} ({when[6:]}). It is on your calendar; whether to answer "
-                                "Yes/No is up to you.", event_id=event_id)
+                                f": {inv.get('title', '')} ({when[6:]}). It is on your calendar"
+                                + ("; it is accepted for you." if self.cfg.calendar.confirm_invites else
+                                   "; whether to answer Yes/No is up to you."), event_id=event_id)
         return count + await self.detect_meeting_changes(hub)
 
     async def detect_meeting_changes(self, hub: MCPHub) -> int:
@@ -857,6 +1090,18 @@ class Steward:
         return sorted(items, key=lambda m: m.get("at") or "")
 
     @staticmethod
+    def _received_label(event: dict[str, Any], cls: dict[str, Any], meeting_change: bool, call: bool) -> str:
+        raw = event.get("raw") or {}
+        if call:
+            return "Missed call received"
+        if meeting_change:
+            return f"Meeting {raw.get('change') or 'changed'}"
+        if event["source"] == "calendar" or raw.get("invites") or "calendar_invite" in (cls.get("categories") or []):
+            return "Invitation received"
+        what = {"email": "an email", "linkedin": "a LinkedIn message", "whatsapp": "a WhatsApp message"}
+        return f"Just received {what.get(event['source'], 'a message')}"
+
+    @staticmethod
     def _fixed_classification(category: str, summary: str, event: dict[str, Any], needs_reply: bool) -> dict[str, Any]:
         """Events Job Sourcer generated itself need no LLM triage."""
         return {"is_recruiter_related": True, "needs_reply": needs_reply, "summary": summary,
@@ -896,7 +1141,9 @@ class Steward:
         follow_up = bool(raw.get("follow_up"))
         meeting_change = raw.get("kind") == "meeting_change"
         if follow_up:
-            cls = self._fixed_classification("follow_up", "Follow-up on a quiet thread", event, True)
+            cls = self._fixed_classification(
+                "follow_up", "Checking in: asking for an update and whether the position is still open"
+                if raw.get("review") else "Follow-up on a quiet thread", event, True)
         elif meeting_change:
             cls = self._fixed_classification("meeting_change", f"{event.get('subject')}. {event.get('body_text')}",
                                              event, raw.get("change") in ("cancelled", "declined"))
@@ -921,6 +1168,10 @@ class Steward:
                     "sender_name": "", "sender_address": "", "body_text": "", "raw_json": "{}",
                     "classification_json": None})
                 return "ignored"
+            if event["source"] == "calendar" and not meeting_change and self.cfg.calendar.confirm_invites:
+                return await self._accept_calendar_invite(ctx, event, cls, None)
+            # Not about a job, but an invitation in it still goes on your calendar (its email stays where it is).
+            await self._add_invites(ctx, event, cls, None, job=False)
             self.db.update("events", event["id"], {"status": "ignored", "processed_at": now_iso(),
                                                    "error": "Not related to your job search."})
             return "ignored"
@@ -944,6 +1195,8 @@ class Steward:
             opp = pipeline.upsert_for_event(self.db, event, cls)
         if opp and (follow_up or meeting_change):
             cls["company"], cls["role"] = opp.get("company") or "", opp.get("role") or ""
+        if opp and not follow_up:
+            pipeline.note(self.db, opp["id"], self._received_label(event, cls, meeting_change, call))
         if call:
             via = self._reply_target(opp)
             if via:
@@ -974,6 +1227,8 @@ class Steward:
             "AND event_id IN (SELECT id FROM events WHERE thread_key = ? AND source = ? AND id != ?)",
             (now_iso(), event.get("thread_key") or "-", event["source"], event["id"]))
 
+        if event["source"] == "calendar" and not meeting_change and self.cfg.calendar.confirm_invites:
+            return await self._accept_calendar_invite(ctx, event, cls, opp)
         added = await self._add_invites(ctx, event, cls, opp)
         evidence = await cv_analyst.analyze(ctx, cls)
         # Once the invitation is on the calendar, nothing else gets booked for this message.
@@ -984,7 +1239,8 @@ class Steward:
             # Ask the organizer to move a conflicting invite; offer new times when a meeting was dropped.
             needs_text = sched["kind"] == "invite_conflict" or (meeting_change and cls["needs_reply"])
         else:
-            needs_text = cls["needs_reply"]
+            # The "I will attend" reply already went out: write more only if they asked something else.
+            needs_text = cls["needs_reply"] and not (cls.get("invite_confirmed") and not cls.get("questions"))
         if not needs_text and not sched.get("booking") and not sched.get("rsvp"):
             self.db.update("events", event["id"], {"status": "info", "processed_at": now_iso()})
             return "info"
@@ -993,7 +1249,8 @@ class Steward:
                                              event.get("sender_address", ""))
         examples = fewshot.retrieve(self.ledger, event, cls)
         if needs_text:
-            drafted = await drafter.draft(ctx, event, thread, cls, evidence, sched, opp, prefs, examples)
+            drafted = await drafter.draft(ctx, event, thread, cls, evidence, sched, opp, prefs, examples,
+                                          instruction=raw.get("instruction", ""))
             review = await drafter.critique(ctx, event, cls, drafted, evidence, sched, opp)
         else:
             drafted = {"reply_subject": "", "reply_body": "", "answered_questions": [], "unanswered_questions": [],
@@ -1004,6 +1261,9 @@ class Steward:
         actions = self.build_actions(event, cls, drafted, sched, opp)
         decision = route(self.cfg, self.db, event=event, cls=cls, evidence=evidence, sched=sched, drafted=drafted,
                          review=review, opp=opp)
+        if raw.get("review"):  # a follow-up you asked for always waits for your decision
+            decision.route = "ask"
+            decision.reasons.insert(0, "Follow-up from your position review: approve it to send.")
         draft_id = self._save_draft(event, cls, evidence, sched, drafted, review, actions, decision, opp, examples,
                                     prefs)
         tasks_mod.link_draft(self.db, event["id"], draft_id)
@@ -1039,6 +1299,7 @@ class Steward:
             # The email is the newest news: it wins over a stage just pulled from Notion.
             pipeline.set_stage(self.db, opp["id"], "closed_lost", force=True)
             self.db.update("opportunities", opp["id"], {"next_action": "Turned down: not moving forward"})
+            pipeline.note(self.db, opp["id"], "Rejected: they are not moving forward")
         done = [f"Rejection from {who}: pipeline set to Closed (lost)"
                 + (" (Notion is updated in this check)" if opp and hub.enabled("notion") else "")]
         raw, trashed = event["raw"], None
@@ -1101,24 +1362,25 @@ class Steward:
         return task_id
 
     async def _add_invites(self, ctx: AgentContext, event: dict[str, Any], cls: dict[str, Any],
-                           opp: dict[str, Any] | None) -> list[str]:
-        """A recruiter's meeting invitation in an email goes on your calendar right away, without asking.
+                           opp: dict[str, Any] | None, job: bool = True) -> list[str]:
+        """Any meeting invitation in an email goes on your calendar right away, without asking, whoever sent it.
 
-        Added as is (no reply to the recruiter, nobody invited) and never twice. Returns the times added."""
+        Added as is (no reply to the organizer, nobody invited) and never twice. Returns the times added."""
         raw = event["raw"]
         found = [i for i in raw.get("invites") or [] if i.get("method") != "cancel"]
         if event["source"] != "email" or not (found or raw.get("add_to_calendar")):
             return []
         who = event.get("sender_name") or event.get("sender_address")
         if not found:
+            if raw.get("invites"):  # only cancellations: there is nothing to add
+                return []
             activity.record(self.db, "calendar", f"Email from {who} offers 'Add to Calendar', but its date and time "
                             "could not be read (no invitation file, and the link carries no time). Add it yourself; "
                             "the message is in your briefing.", "warn", event_id=event["id"])
             return []
         if cls.get("suspicious"):
-            activity.record(self.db, "calendar", f"Invitation from {who} not added: the message looks suspicious.",
-                            "warn", event_id=event["id"])
-            return []
+            activity.record(self.db, "calendar", f"Invitation from {who} looks suspicious; adding it to your calendar "
+                            "anyway. Check it before you join.", "warn", event_id=event["id"])
         if not ctx.hub.enabled("calendar"):
             activity.record(self.db, "calendar", f"Invitation from {who} not added: the calendar is not connected "
                             "(Setup step 5).", "warn", event_id=event["id"])
@@ -1129,22 +1391,84 @@ class Steward:
             "uid": i["uid"], "title": i["title"], "start": i["start"], "end": i["end"], "location": i["location"],
             "description": i["description"], "organizer_email": i["organizer_email"] or event.get("sender_address", ""),
             "organizer_name": i["organizer_name"] or event.get("sender_name", "")}} for i in found]
+        # A job invitation is also answered: "I will attend". Once per meeting, never to a no-reply address.
+        confirmed = self.db.kv_get("invites:confirmed", []) or []
+        new = [i for i in found if (i["uid"] or f"{i['start']}|{i['title']}") not in confirmed]
+        reply = []
+        if job and self.cfg.calendar.confirm_invites and new and not cls.get("suspicious"):
+            body = _attendance_note(event, new, self.cfg.profile.name, tz_name)
+            reply = [a for a in self.build_actions(event, cls, {"reply_body": body}, {}, opp)
+                     if a["type"] == "send_email"]
+        if reply:
+            actions += reply
+            self.db.kv_set("invites:confirmed", confirmed + [i["uid"] or f"{i['start']}|{i['title']}" for i in new])
+            cls["invite_confirmed"] = True
+        elif job and new and cls.get("suspicious"):
+            activity.record(self.db, "calendar", f"Invitation from {who} looks suspicious: added to your calendar, "
+                            "but no 'I will attend' reply was sent. Answer it yourself if it is real.", "warn",
+                            event_id=event["id"])
         draft_id = self.db.insert("drafts", {
             "event_id": event["id"], "opportunity_id": opp["id"] if opp else None, "channel": "calendar",
-            "summary": f"Added to your calendar: {'; '.join(labels)}", "actions_json": dumps(actions),
+            "summary": f"Added to your calendar{' and confirmed you will attend' if reply else ''}: {'; '.join(labels)}",
+            "actions_json": dumps(actions),
             "analysis_json": dumps({"classification": cls}), "confidence": 1.0, "job_advancement": 1.0,
             "routing_band": "HIGH", "risk_level": "low", "priority": "normal", "route": "auto_approve",
-            "route_reasons_json": dumps(["Recruiters' meeting invitations go on your calendar automatically, "
-                                         "without a reply to them."]),
+            "route_reasons_json": dumps(["Meeting invitations go on your calendar automatically"
+                                         + (" and are answered that you will attend." if reply else
+                                            ", without a reply to the organizer.")]),
             "status": "queued", "created_at": now_iso(), "decided_at": now_iso(),
+            **({} if job else {"cleaned_at": now_iso()}),  # a personal invitation is never filed under Jobs
         })
         self.ledger.append("auto_execution", {
             **decisions.ledger_payload(self.db, self.db.get_draft(draft_id), "auto", actions),
             "rule_id": None, "tier": "standing_instruction",
-            "instruction": "Add recruiters' meeting invitations to my calendar without asking (no reply).",
+            "instruction": "Add every meeting invitation to my calendar without asking"
+                           + (", and reply that I will attend." if reply else " (no reply)."),
         }, event_id=event["id"], draft_id=draft_id)
         await Executor(self.cfg, self.db, self.ledger, ctx.hub).execute_draft(draft_id)
         return [fmt_range(i["start"], i["end"], tz_name) for i in found]
+
+    async def _accept_calendar_invite(self, ctx: AgentContext, event: dict[str, Any], cls: dict[str, Any],
+                                      opp: dict[str, Any] | None) -> str:
+        """A calendar invitation is accepted right away, without asking (a conflict is flagged, not a blocker)."""
+        raw = event["raw"]
+        who = event.get("sender_name") or event.get("sender_address") or "someone"
+        when = fmt_range(raw.get("start", ""), raw.get("end", ""), self.cfg.profile.timezone)
+        if cls.get("suspicious"):
+            activity.record(self.db, "calendar", f"Invitation from {who} ({when}) looks suspicious: it stays on your "
+                            "calendar, but it was not accepted. Check it and answer it yourself.", "warn",
+                            event_id=event["id"])
+            self.db.update("events", event["id"], {"status": "info", "processed_at": now_iso()})
+            return "info"
+        try:
+            check = await ctx.hub.call("calendar", "check_availability",
+                                       {"start": raw["start"], "end": raw["end"], "buffer_minutes": 0})
+            clash = [c.get("title", "busy") for c in check.get("conflicts", []) if c.get("id") != raw.get("id")]
+        except (MCPToolError, KeyError):
+            clash = []
+        actions = [{"type": "rsvp_event", "payload": {"event_id": raw.get("id"), "response": "accepted",
+                                                      "despite_conflicts": True}}]
+        draft_id = self.db.insert("drafts", {
+            "event_id": event["id"], "opportunity_id": opp["id"] if opp else None, "channel": "calendar",
+            "summary": f"Accepted: {event.get('subject') or 'meeting'}, {when}", "actions_json": dumps(actions),
+            "analysis_json": dumps({"classification": cls}), "confidence": 1.0, "job_advancement": 1.0,
+            "routing_band": "HIGH", "risk_level": "low", "priority": "normal", "route": "auto_approve",
+            "route_reasons_json": dumps(["Calendar invitations are accepted automatically."]),
+            "status": "queued", "created_at": now_iso(), "decided_at": now_iso(),
+            **({} if cls.get("is_recruiter_related") else {"cleaned_at": now_iso()}),
+        })
+        self.ledger.append("auto_execution", {
+            **decisions.ledger_payload(self.db, self.db.get_draft(draft_id), "auto", actions),
+            "rule_id": None, "tier": "standing_instruction",
+            "instruction": "Accept every calendar invitation without asking.",
+        }, event_id=event["id"], draft_id=draft_id)
+        if clash:
+            activity.record(self.db, "calendar", f"Accepted {event.get('subject') or 'the invitation'} ({when}) "
+                            f"although it overlaps {', '.join(clash)}. Sort out the double booking.", "warn",
+                            event_id=event["id"], draft_id=draft_id)
+        await Executor(self.cfg, self.db, self.ledger, ctx.hub).execute_draft(draft_id)
+        self.db.update("events", event["id"], {"status": "processed", "processed_at": now_iso()})
+        return "auto"
 
     def build_actions(self, event: dict[str, Any], cls: dict[str, Any], drafted: dict[str, Any],
                       sched: dict[str, Any], opp: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -1239,7 +1563,7 @@ class Steward:
         })
 
     async def sync_notion(self, hub: MCPHub, errors: list[str]) -> None:
-        if not hub.enabled("notion"):
+        if not hub.enabled("notion") or not self.cfg.notion.database_id:
             return
         for opp in self.db.query("SELECT id FROM opportunities WHERE notion_synced_at IS NULL OR updated_at > notion_synced_at"):
             try:

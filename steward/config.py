@@ -112,6 +112,9 @@ class CalendarConfig(BaseModel):
     token_file: str = "secrets/google_token.json"
     poll_minutes: int = 2
     invite_lookahead_days: int = 21
+    # Every job invitation is confirmed without asking: an emailed one gets an "I will attend" reply, a calendar
+    # one is accepted (even over a conflict, which is flagged). Suspicious ones go on the calendar but wait for you.
+    confirm_invites: bool = True
     server: ServerSpec | None = None
 
 
@@ -123,6 +126,8 @@ class SchedulingConfig(BaseModel):
     default_duration_minutes: int = 30
     min_notice_hours: int = 18
     lookahead_days: int = 10
+    # An email offering times lists your free hours for every working day this many days ahead.
+    email_availability_days: int = 14
     max_slots: int = 3
     avoid: list[str] = Field(default_factory=list)  # e.g. ["Fri 15:00-18:00"]
     book_on_accept: bool = True
@@ -179,6 +184,31 @@ class NotionConfig(BaseModel):
     enabled: bool = False
     token_env: str = "NOTION_TOKEN"
     database_id: str = ""
+    # Entries with a date and time in any Notion database the integration can see go on your calendar.
+    calendar_sync: bool = True
+    calendar_poll_minutes: int = 15
+    calendar_lookahead_days: int = 60
+    calendar_default_minutes: int = 60   # an entry with a start time but no end
+    # More workspaces: one integration token per workspace, each in its own .env variable.
+    extra_token_envs: list[str] = Field(default_factory=list)
+    server: ServerSpec | None = None
+
+
+class WorkCalendarConfig(BaseModel):
+    """Your company (Microsoft 365) calendar, mirrored onto your personal calendar."""
+    enabled: bool = False
+    source: Literal["ics", "graph"] = "ics"     # a published calendar link, or Microsoft sign-in
+    ics_url_env: str = "WORK_CALENDAR_ICS_URL"  # the link is a secret: it lives in .env
+    graph_client_id: str = ""                   # Application (client) ID of the app registration
+    graph_tenant: str = "organizations"         # or your company's tenant ID / domain
+    token_file: str = "secrets/microsoft_token.json"
+    poll_minutes: int = 10
+    lookahead_days: int = 30
+    # What a copy shows: busy = "Busy (work)" only; title = the meeting's title; full = title, location, Teams link,
+    # and organizer. The meeting body and the attendee list are never copied.
+    detail: Literal["busy", "title", "full"] = "title"
+    title_prefix: str = "[Work] "
+    include_free: bool = False                  # meetings marked Free in Outlook
     server: ServerSpec | None = None
 
 
@@ -249,6 +279,7 @@ class Config(BaseModel):
     linkedin: LinkedInConfig = Field(default_factory=LinkedInConfig)
     whatsapp: WhatsAppConfig = Field(default_factory=WhatsAppConfig)
     notion: NotionConfig = Field(default_factory=NotionConfig)
+    work_calendar: WorkCalendarConfig = Field(default_factory=WorkCalendarConfig)
     cv: CVConfig = Field(default_factory=CVConfig)
     autonomy: AutonomyConfig = Field(default_factory=AutonomyConfig)
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)

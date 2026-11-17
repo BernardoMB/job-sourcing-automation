@@ -46,6 +46,9 @@ def schedule_block(sched: dict[str, Any]) -> dict[str, Any]:
         "accepted_time": sched.get("accepted_label", ""),
         "calendar_invite_will_be_sent": bool(sched.get("booking")),
         "slots": [s["label"] for s in sched.get("slots", [])],
+        **({"slots_are": "The candidate's free hours for each working day of the next two weeks. List every one, "
+                         "one per line, exactly as given, and ask which day and time suits them."}
+           if any(s.get("daily") for s in sched.get("slots", [])) else {}),
         "checked": [{"time": c.get("label"), "ok": c.get("ok", c.get("free")), "problems": c.get("problems", [])}
                     for c in sched.get("checks", [])],
     }

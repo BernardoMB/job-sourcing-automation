@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
-from steward.scheduling import conflicts, evaluate_slot, find_slots
+from steward.scheduling import conflicts, evaluate_slot, find_slots, free_windows
 from steward.servers.common import READ_ONLY_REMOTE, WRITE, JsonStore, guarded, make_server, server_config
 from steward.timeutil import parse_iso, to_iso, utcnow
 
@@ -88,6 +88,22 @@ class SandboxCalendar:
         self.store.save(data)
         return {"id": event["id"]}
 
+    def get(self, event_id: str) -> dict[str, Any] | None:
+        return next((e for e in self.store.load()["events"] if e["id"] == event_id
+                     and e.get("status", "confirmed") != "cancelled"), None)
+
+    def remove_copy(self, event_id: str) -> None:
+        data = self.store.load()
+        data["events"] = [e for e in data["events"] if e["id"] != event_id]
+        self.store.save(data)
+
+    def move_copy(self, event_id: str, body: dict[str, Any]) -> None:
+        data = self.store.load()
+        for e in data["events"]:
+            if e["id"] == event_id:
+                e.update({k: body[k] for k in ("title", "start", "end", "description", "location")})
+        self.store.save(data)
+
 
 class GoogleCalendar:
     def __init__(self) -> None:
@@ -136,6 +152,7 @@ class GoogleCalendar:
             "my_response": me.get("responseStatus", "accepted") if me else "accepted",
             "transparent": item.get("transparency") == "transparent",
             "created_by_steward": priv.get("steward") == "1",
+            "ical_uid": item.get("iCalUID", ""),
             "status": item.get("status", "confirmed"),
         }
 
@@ -219,6 +236,21 @@ class GoogleCalendar:
             res = self.svc.events().insert(calendarId=self.cal, body=event, sendUpdates="none").execute()
         return {"id": res["id"]}
 
+    def get(self, event_id: str) -> dict[str, Any] | None:
+        try:
+            item = self.svc.events().get(calendarId=self.cal, eventId=event_id).execute()
+        except Exception:  # noqa: BLE001 - deleted for good, or never there
+            return None
+        return None if item.get("status") == "cancelled" else self._norm(item)
+
+    def remove_copy(self, event_id: str) -> None:
+        self.svc.events().delete(calendarId=self.cal, eventId=event_id, sendUpdates="none").execute()
+
+    def move_copy(self, event_id: str, body: dict[str, Any]) -> None:
+        self.svc.events().patch(calendarId=self.cal, eventId=event_id, sendUpdates="none", body={
+            "summary": body["title"], "description": body.get("description", ""), "location": body.get("location", ""),
+            "start": {"dateTime": body["start"]}, "end": {"dateTime": body["end"]}}).execute()
+
 
 _backend: SandboxCalendar | GoogleCalendar | None = None
 
@@ -294,6 +326,20 @@ def find_free_slots(
 
 @mcp.tool(annotations=READ_ONLY_REMOTE)
 @guarded
+def find_free_windows(window_start: str, window_end: str, min_minutes: int = 30) -> dict[str, Any]:
+    """Your free time day by day (inside working hours, honoring buffers, minimum notice, and blocked windows)."""
+    sch = cfg.scheduling
+    ws, we = _dt(window_start, "window_start"), _dt(window_end, "window_end")
+    busy = backend().busy(ws - timedelta(hours=2), we + timedelta(hours=2))
+    windows = free_windows(busy, ws, we, min_minutes=min_minutes, tz_name=cfg.profile.timezone,
+                           working_days=sch.working_days, work_start=sch.work_start, work_end=sch.work_end,
+                           buffer_minutes=sch.buffer_minutes, min_notice_hours=sch.min_notice_hours,
+                           avoid=sch.avoid, now=utcnow())
+    return {"windows": windows, "timezone": cfg.profile.timezone}
+
+
+@mcp.tool(annotations=READ_ONLY_REMOTE)
+@guarded
 def pending_invites(days: int = 21) -> dict[str, Any]:
     """Upcoming invitations from other people that you have not answered yet."""
     now = utcnow()
@@ -360,6 +406,55 @@ def add_invite(
     res = b.add_copy({"uid": uid, "title": title, "start": to_iso(s), "end": to_iso(e), "description": description,
                       "location": location, "organizer_email": organizer_email, "organizer_name": organizer_name})
     return {"status": "added", "id": res["id"], "overlaps": overlaps}
+
+
+@mcp.tool(annotations=WRITE)
+@guarded
+def sync_copy(uid: str, title: str, start: str, end: str, description: str = "", location: str = "",
+              event_id: str = "") -> dict[str, Any]:
+    """Keep a copy of an entry from elsewhere (a Notion row) on your calendar: added once, moved or renamed when the
+    entry changes, never duplicated. Nobody is invited or notified. Pass event_id when it was added before: if you
+    deleted that copy, it is not added again. Executor only."""
+    s, e = _dt(start, "start"), _dt(end, "end")
+    if e <= s:
+        raise ValueError("end must be after start")
+    if not uid:
+        raise ValueError("uid is required")
+    b = backend()
+    body = {"uid": uid, "title": title, "start": to_iso(s), "end": to_iso(e), "description": description,
+            "location": location}
+    same = b.by_uid(uid)
+    if not same and event_id:
+        mine = b.get(event_id)
+        if mine is None:
+            return {"status": "removed", "id": event_id}  # you deleted it from your calendar: leave it out
+        same = [mine]
+    if same:
+        cur = same[0]
+        if (parse_iso(cur["start"]), parse_iso(cur["end"]), cur.get("title", "")) == (s, e, title):
+            return {"status": "unchanged", "id": cur["id"]}
+        b.move_copy(cur["id"], body)
+        return {"status": "updated", "id": cur["id"], "was": cur.get("start")}
+    overlaps = [x["title"] for x in b.busy(s, e)]
+    res = b.add_copy(body)
+    return {"status": "added", "id": res["id"], "overlaps": overlaps}
+
+
+@mcp.tool(annotations=WRITE)
+@guarded
+def remove_copy(event_id: str, uid: str) -> dict[str, Any]:
+    """Remove a copy Job Sourcer itself made (its meeting was cancelled at the source). Only events whose
+    invitation UID is the given Job Sourcer copy UID can be removed. Executor only."""
+    if not uid.endswith("@jobsourcer"):
+        raise ValueError("Only copies Job Sourcer made can be removed")
+    b = backend()
+    mine = [x for x in b.by_uid(uid) if x["id"] == event_id] or ([b.get(event_id)] if b.get(event_id) else [])
+    if not mine:
+        return {"status": "gone", "id": event_id}
+    if not (mine[0].get("ical_uid") == uid or mine[0].get("created_by_steward")):
+        raise ValueError("That event was not made by Job Sourcer")
+    b.remove_copy(event_id)
+    return {"status": "removed", "id": event_id}
 
 
 @mcp.tool(annotations=WRITE)

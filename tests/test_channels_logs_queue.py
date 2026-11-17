@@ -167,10 +167,17 @@ def test_recruiter_invitations_go_on_the_calendar_without_asking(steward):
     for d in steward.db.query("SELECT * FROM drafts WHERE event_id = ? AND id != ?", (ev_id, auto["id"])):
         assert not any(a["type"] in ("create_event", "rsvp_event") for a in loads(d["actions_json"], []))
     assert steward.db.query("SELECT 1 FROM ledger WHERE kind = 'auto_execution' AND draft_id = ?", (auto["id"],))
+    # ...and the organizer is told you will attend, in the same thread, without asking either.
+    [sent] = [m for m in sandbox_json(steward, "outbox.json")["sent"] if m["to"] == "dana.lee@acme-cloud.example"]
+    assert "I confirm I will attend" in sent["body"] and sent["in_reply_to"] == "<m500@example.test>"
+    assert "confirmed you will attend" in auto["summary"]
+    assert not steward.db.query("SELECT 1 FROM drafts WHERE event_id = ? AND status = 'pending'", (ev_id,))
 
-    # The same invitation again (a reminder, a forward): not added twice.
+    # The same invitation again (a reminder, a forward): not added twice, and not confirmed twice.
     _deliver(steward, 501, "dana.lee@acme-cloud.example", "Reminder: Technical interview", "See you soon.", ics=ics)
     run(steward.cycle(force=True))
+    assert len([m for m in sandbox_json(steward, "outbox.json")["sent"]
+                if m["to"] == "dana.lee@acme-cloud.example"]) == 1
     cal = sandbox_json(steward, "calendar.json")["events"]
     assert len([e for e in cal if e.get("ical_uid") == "040000008200E00074C5B7101A82E008-acme-1"]) == 1
     assert any("already on your calendar, not added again" in e["message"] for e in activity.recent(steward.db))
@@ -181,6 +188,43 @@ def test_recruiter_invitations_go_on_the_calendar_without_asking(steward):
              ics=other)
     run(steward.cycle(force=True))
     assert len([e for e in sandbox_json(steward, "calendar.json")["events"] if e["start"] == start_utc]) == 1
+
+
+
+def test_every_invitation_goes_on_the_calendar_whoever_sent_it(steward, monkeypatch):
+    from steward.agents import classifier
+    run(steward.cycle(force=True))
+    real = classifier.classify
+    verdicts = {"Invitation: Oden Technologies - Data Scientist": {"suspicious": True},
+                "Invitation: Dentist check-up": {"is_recruiter_related": False}}
+
+    async def classify(ctx, event, thread):
+        return {**await real(ctx, event, thread), **verdicts.get(event.get("subject"), {})}
+
+    monkeypatch.setattr(classifier, "classify", classify)
+    for uid, (sender, subject, uid_tag, days) in enumerate([
+            ("someone9911@gmail.example", "Invitation: Oden Technologies - Data Scientist", "odd-1", 4),
+            ("frontdesk@smile-dental.example", "Invitation: Dentist check-up", "dentist-1", 5)], start=600):
+        ics, _ = _outlook_invite(days)
+        _deliver(steward, uid, sender, subject, "Please join.", ics=ics.replace(
+            "UID:040000008200E00074C5B7101A82E008-acme-1", f"UID:{uid_tag}"))
+    run(steward.cycle(force=True))
+    uids = {e.get("ical_uid") for e in sandbox_json(steward, "calendar.json")["events"]}
+    assert {"odd-1", "dentist-1"} <= uids  # flagged suspicious, or not about a job: added all the same
+    assert any("looks suspicious; adding it to your calendar anyway" in e["message"]
+               for e in activity.recent(steward.db))
+    # Suspicious: on the calendar, but nobody is told you will attend.
+    assert not any("someone9911" in m["to"] for m in sandbox_json(steward, "outbox.json")["sent"])
+    dentist = steward.db.query_one("SELECT * FROM events WHERE subject = 'Invitation: Dentist check-up'")
+    assert dentist["status"] == "ignored" and dentist["filed_at"] is None  # its email is not filed under Jobs
+
+    # A cancellation email is not mistaken for an invitation whose time could not be read.
+    cancel = ("BEGIN:VCALENDAR\nMETHOD:CANCEL\nBEGIN:VEVENT\nUID:odd-1\nSUMMARY:Call\nDTSTART:20261128T150000Z\n"
+              "DURATION:PT1H\nEND:VEVENT\nEND:VCALENDAR")
+    _deliver(steward, 610, "someone9911@gmail.example", "Canceled event: Oden Technologies - Data Scientist",
+             "This event has been canceled. Add to Calendar", ics=cancel)
+    run(steward.cycle(force=True))
+    assert not any("could not be read" in e["message"] for e in activity.recent(steward.db))
 
 
 # -- logs, queue, execute -------------------------------------------------------------
@@ -219,3 +263,41 @@ def test_queue_logs_and_execute_now(workspace):
         assert next(q for q in client.get("/api/queue").json()["items"] if q["id"] == li["id"])["status_label"] == "Done"
         assert any("you pressed Execute" in e["message"] for e in client.get("/api/logs").json()["entries"])
         assert client.post(f"/api/drafts/{li['id']}/execute", headers=h).status_code == 400  # only deferred items
+
+
+def test_spanish_invitations_are_confirmed_in_spanish(steward):
+    run(steward.cycle(force=True))
+    ics, _ = _outlook_invite(6)
+    _deliver(steward, 700, "lucia@talento-mx.example", "Invitación: Entrevista técnica",
+             "Hola Bernardo, te comparto la invitación para la entrevista técnica del puesto. Saludos, Lucía",
+             ics=ics.replace("UID:040000008200E00074C5B7101A82E008-acme-1", "UID:es-1"))
+    run(steward.cycle(force=True))
+    [sent] = [m for m in sandbox_json(steward, "outbox.json")["sent"] if m["to"] == "lucia@talento-mx.example"]
+    assert "Confirmo mi asistencia el " in sent["body"] and sent["subject"].startswith("Re: ")
+
+
+def test_calendar_invitations_are_accepted_even_over_a_conflict(steward):
+    cal_path = steward.cfg.sandbox_path / "calendar.json"
+    cal = json.loads(cal_path.read_text(encoding="utf-8"))
+    cobalt = next(e for e in cal["events"] if e["id"] == "cobalt-tech-1")
+    cal["events"].append({**cobalt, "id": "clash-1", "title": "Dentist", "organizer": {}, "attendees": [],
+                          "my_response": "accepted", "ical_uid": "clash-1"})
+    cal_path.write_text(json.dumps(cal), encoding="utf-8")
+    run(steward.cycle(force=True))
+    cal = json.loads(cal_path.read_text(encoding="utf-8"))
+    assert next(e for e in cal["events"] if e["id"] == "cobalt-tech-1")["my_response"] == "accepted"
+    assert any("although it overlaps Dentist" in e["message"] for e in activity.recent(steward.db))
+
+
+def test_off_switch_keeps_invitations_silent(workspace):
+    data = yaml.safe_load(workspace.read_text(encoding="utf-8"))
+    data.setdefault("calendar", {})["confirm_invites"] = False
+    workspace.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    from steward.orchestrator import Steward
+    s = Steward(load_config(workspace))
+    try:
+        run(s.cycle(force=True))
+        cal = sandbox_json(s, "calendar.json")["events"]
+        assert next(e for e in cal if e["id"] == "cobalt-tech-1")["my_response"] == "needsAction"
+    finally:
+        s.db.close()

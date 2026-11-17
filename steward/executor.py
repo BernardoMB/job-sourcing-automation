@@ -21,7 +21,7 @@ from steward.config import Config
 from steward.db import Database, dumps, loads
 from steward.ledger import Ledger
 from steward.mcp_hub import ExecutorCapability, MCPHub
-from steward.timeutil import fmt_local, now_iso, parse_iso, to_iso, utcnow
+from steward.timeutil import fmt_local, fmt_range, now_iso, parse_iso, to_iso, utcnow
 
 ACTION_LABELS = {"send_email": "email reply", "send_linkedin": "LinkedIn reply", "send_whatsapp": "WhatsApp reply",
                  "create_event": "meeting booking",
@@ -224,7 +224,7 @@ class Executor:
             }, capability=self._cap)
         if kind == "rsvp_event":
             raw = event.get("raw", {}) if isinstance(event.get("raw"), dict) else loads(event.get("raw_json"), {})
-            if p.get("response", "accepted") == "accepted" and raw.get("start"):
+            if p.get("response", "accepted") == "accepted" and raw.get("start") and not p.get("despite_conflicts"):
                 check = await self.hub.call("calendar", "check_availability",
                                             {"start": raw["start"], "end": raw["end"], "buffer_minutes": 0})
                 others = [c for c in check.get("conflicts", []) if c.get("id") != p["event_id"]]
@@ -234,6 +234,20 @@ class Executor:
                                        {"event_id": p["event_id"], "response": p.get("response", "accepted")},
                                        capability=self._cap)
         raise ValueError(f"Unknown action type {kind}")
+
+    def _when(self, p: dict[str, Any]) -> str:
+        return fmt_range(p.get("start", ""), p.get("end", ""), self.cfg.profile.timezone) or p.get("start", "")
+
+    def _sent_label(self, kind: str, draft: dict[str, Any], event: dict[str, Any]) -> str:
+        """'Reply sent by email', 'Follow-up sent on LinkedIn', with the meeting it booked, if any."""
+        raw = event.get("raw", {}) if isinstance(event.get("raw"), dict) else loads(event.get("raw_json"), {}) or {}
+        where = {"send_email": "by email", "send_linkedin": "on LinkedIn", "send_whatsapp": "on WhatsApp"}[kind]
+        text = f"{'Follow-up' if raw.get('follow_up') else 'Reply'} sent {where}"
+        if raw.get("review"):
+            text += " (asked for an update and whether the position is still open)"
+        actions = loads(draft.get("final_actions_json"), None) or loads(draft.get("actions_json"), []) or []
+        booked = next((a["payload"] for a in actions if a["type"] == "create_event" and not a.get("skip")), None)
+        return f"{text}; meeting scheduled: {self._when(booked)}" if booked else text
 
     def _after_success(self, action: dict[str, Any], result: dict[str, Any], draft: dict[str, Any],
                        event: dict[str, Any]) -> None:
@@ -252,11 +266,18 @@ class Executor:
                 self.db.execute("INSERT OR IGNORE INTO message_ids (message_id, thread_key) VALUES (?, ?)",
                                 (ext, event["thread_key"]))
             pipeline.record_outbound(self.db, opp_id, "Awaiting recruiter reply")
+            pipeline.note(self.db, opp_id, self._sent_label(kind, draft, event))
         elif kind == "create_event":
             pipeline.record_outbound(self.db, opp_id, f"Call booked: {p['start'][:16].replace('T', ' ')} UTC")
+            pipeline.note(self.db, opp_id, f"Meeting scheduled: {self._when(p)}")
             if opp_id:
                 pipeline.set_stage(self.db, opp_id, "screening")
         elif kind == "rsvp_event" and p.get("response") == "accepted":
             pipeline.record_outbound(self.db, opp_id, "Interview accepted")
+            pipeline.note(self.db, opp_id, "Invitation accepted")
             if opp_id:
                 pipeline.set_stage(self.db, opp_id, "interviewing")
+        elif kind == "rsvp_event":
+            pipeline.note(self.db, opp_id, f"Invitation {p.get('response') or 'answered'}")
+        elif kind == "add_to_calendar" and result.get("status") == "added":
+            pipeline.note(self.db, opp_id, f"Invitation added to your calendar: {self._when(p)}")

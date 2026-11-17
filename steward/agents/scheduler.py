@@ -43,6 +43,23 @@ async def slots_between(ctx: AgentContext, start, end, duration: int) -> list[di
     return [{**s, "label": label(ctx, s["start"], s["end"])} for s in res.get("slots", [])]
 
 
+def replies_by_email(event: dict[str, Any]) -> bool:
+    raw = event.get("raw") or {}
+    return ((raw.get("reply_via") or {}).get("channel") or raw.get("channel") or event.get("source")) == "email"
+
+
+async def offer(ctx: AgentContext, event: dict[str, Any], start, end, duration: int) -> list[dict[str, str]]:
+    """The times a reply offers: by email, your free hours for each working day of the next two weeks;
+    elsewhere (LinkedIn, WhatsApp), a few slots between start and end."""
+    if not replies_by_email(event):
+        return await slots_between(ctx, start, end, duration)
+    now = utcnow()
+    res = await ctx.hub.call("calendar", "find_free_windows", {
+        "window_start": to_iso(now), "window_end": to_iso(now + timedelta(days=ctx.cfg.scheduling.email_availability_days)),
+        "min_minutes": duration})
+    return [{**w, "label": label(ctx, w["start"], w["end"]), "daily": True} for w in res.get("windows", [])]
+
+
 async def plan(ctx: AgentContext, event: dict[str, Any], cls: dict[str, Any]) -> dict[str, Any]:
     try:
         return await _plan(ctx, event, cls)
@@ -74,11 +91,11 @@ async def _plan(ctx: AgentContext, event: dict[str, Any], cls: dict[str, Any]) -
             if others:
                 result["kind"] = "invite_conflict"
                 s = parse_iso(raw["start"]) or now
-                result["slots"] = await slots_between(ctx, max(now, s - timedelta(days=1)),
+                result["slots"] = await offer(ctx, event, max(now, s - timedelta(days=1)),
                                                s + timedelta(days=sch.lookahead_days), sch.default_duration_minutes)
         else:
             result["kind"] = "propose_slots"
-            result["slots"] = await slots_between(ctx, now, now + timedelta(days=sch.lookahead_days),
+            result["slots"] = await offer(ctx, event, now, now + timedelta(days=sch.lookahead_days),
                                            sch.default_duration_minutes)
         return result
 
@@ -97,7 +114,7 @@ async def _plan(ctx: AgentContext, event: dict[str, Any], cls: dict[str, Any]) -
         else:
             result["kind"] = "invite_conflict"
             s = parse_iso(start) or now
-            result["slots"] = await slots_between(ctx, max(now, s - timedelta(days=1)), s + timedelta(days=sch.lookahead_days),
+            result["slots"] = await offer(ctx, event, max(now, s - timedelta(days=1)), s + timedelta(days=sch.lookahead_days),
                                            int(((parse_iso(end) or s) - s).total_seconds() // 60) or 30)
         return result
 
@@ -135,7 +152,7 @@ async def _plan(ctx: AgentContext, event: dict[str, Any], cls: dict[str, Any]) -
                 sch.default_duration_minutes
             window_start = max(now, first - timedelta(days=1))
             result["kind"] = "conflict_counter"
-            result["slots"] = await slots_between(ctx, window_start, window_start + timedelta(days=sch.lookahead_days),
+            result["slots"] = await offer(ctx, event, window_start, window_start + timedelta(days=sch.lookahead_days),
                                            duration)
         return result
 
@@ -143,7 +160,7 @@ async def _plan(ctx: AgentContext, event: dict[str, Any], cls: dict[str, Any]) -
     if cats & (SCHEDULING_CATEGORIES | {"call_notification"}) or \
             any(q["type"] == "availability" for q in cls.get("questions", [])):
         result["kind"] = "propose_slots"
-        result["slots"] = await slots_between(ctx, now, now + timedelta(days=sch.lookahead_days), sch.default_duration_minutes)
+        result["slots"] = await offer(ctx, event, now, now + timedelta(days=sch.lookahead_days), sch.default_duration_minutes)
         if not result["slots"]:
             result["notes"].append("No free slots found in the lookahead window.")
     return result
